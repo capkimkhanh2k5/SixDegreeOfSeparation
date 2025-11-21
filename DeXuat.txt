@@ -1,0 +1,13 @@
+Để cân bằng giữa tốc độ phát triển và hiệu năng xử lý đồ thị:
+
+Backend: Python (FastAPI).
+
+Lý do: Python có thư viện hỗ trợ mạnh mẽ (wikipedia-api, BeautifulSoup) và xử lý cấu trúc dữ liệu (Set, Queue) cực tốt cho thuật toán tìm kiếm. FastAPI nhanh hơn Flask/Django và hỗ trợ bất đồng bộ (async) để gọi nhiều API cùng lúc.
+
+Frontend: ReactJS (hoặc Next.js).
+
+Lý do: Tạo giao diện SPA (Single Page Application) mượt mà, hiển thị sơ đồ liên kết (graph visualization) dễ dàng.
+
+Thuật toán cốt lõi: Bi-directional BFS (Breadth-First Search 2 chiều).
+
+Tư duy: Thay vì tìm từ A -> B (dễ bùng nổ dữ liệu), ta tìm từ A -> và B -> cùng lúc. Khi 2 đường tìm kiếm gặp nhau, đó là đường đi ngắn nhất. Tốc độ nhanh gấp bội.
