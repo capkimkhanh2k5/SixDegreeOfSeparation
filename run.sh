@@ -10,13 +10,13 @@ cleanup() {
 # Trap SIGINT (Ctrl+C)
 trap cleanup SIGINT
 
-echo "Starting Backend..."
-source venv/bin/activate
-uvicorn backend.main:app --reload --port 8001 &
-
-echo "Starting Frontend..."
+echo "Building Frontend..."
 cd frontend
-npm run dev -- --port 8000 &
+npm run build
+cd ..
 
-# Wait for all background processes
-wait
+echo "Starting Unified Server on Port 8000..."
+source venv/bin/activate
+uvicorn backend.main:app --reload --port 8000
+
+# Wait is not needed as uvicorn runs in foreground now (or we can background it if preferred, but foreground is better for logs)

@@ -48,39 +48,43 @@ const StatusConsole = ({ loading }) => {
 
 
     return (
-        <div className="w-full mt-8 bg-black/80 rounded-xl border border-green-500/30 overflow-hidden shadow-[0_0_30px_rgba(0,255,0,0.1)] font-mono text-sm">
-            {/* Console Header */}
-            <div className="bg-gray-900/90 px-4 py-2 border-b border-gray-800 flex items-center justify-between">
+        <div className="h-full flex flex-col bg-white/40 dark:bg-black/40 backdrop-blur-md rounded-2xl border border-white/50 dark:border-white/10 overflow-hidden shadow-lg transition-colors duration-500">
+            <div className="px-4 py-3 bg-white/50 dark:bg-white/5 border-b border-white/20 dark:border-white/5 flex justify-between items-center">
                 <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                    <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                    <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                    <span className="ml-2 text-gray-400 text-xs">System Status: PROCESSING</span>
+                    <div className={`w-2 h-2 rounded-full ${loading ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+                    <span className="text-xs font-mono text-gray-600 dark:text-gray-400 uppercase tracking-wider">System Status</span>
                 </div>
-                <span className="text-green-500 text-xs animate-pulse">● LIVE</span>
+                {loading && <span className="text-xs text-indigo-600 dark:text-indigo-400 font-medium animate-pulse">Processing...</span>}
             </div>
 
-            {/* Console Body */}
-            <div className="p-4 h-64 overflow-y-auto custom-scrollbar">
-                <table className="w-full text-left border-collapse">
-                    <thead>
-                        <tr className="text-gray-500 border-b border-gray-800">
-                            <th className="pb-2 w-32">TIMESTAMP</th>
-                            <th className="pb-2 w-20">STEP</th>
-                            <th className="pb-2">STATUS MESSAGE</th>
-                        </tr>
-                    </thead>
-                    <tbody>
+            <div
+                className="flex-grow overflow-y-auto p-4 font-mono text-sm space-y-2 custom-scrollbar"
+            >
+                {logs.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-gray-400 dark:text-gray-600 opacity-50">
+                        <svg className="w-12 h-12 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                        </svg>
+                        <span>Ready to search</span>
+                    </div>
+                ) : (
+                    <>
                         {logs.map((log, index) => (
-                            <tr key={index} className="text-green-400/90 hover:bg-green-900/10 transition-colors">
-                                <td className="py-1 text-gray-500">{log.time}</td>
-                                <td className="py-1 text-blue-400">STEP {String(log.step).padStart(2, '0')}</td>
-                                <td className="py-1">{log.message}</td>
-                            </tr>
+                            <div key={index} className="animate-slideIn">
+                                <span className="text-gray-400 dark:text-gray-600 mr-2">[{log.time}]</span>
+                                <span className={
+                                    log.type === 'error' ? 'text-red-500 dark:text-red-400' :
+                                        log.type === 'finished' ? 'text-green-600 dark:text-green-400 font-bold' :
+                                            log.type === 'visiting' ? 'text-indigo-600 dark:text-indigo-400' :
+                                                'text-gray-700 dark:text-gray-300'
+                                }>
+                                    {log.message}
+                                </span>
+                            </div>
                         ))}
-                        <tr ref={logsEndRef}></tr>
-                    </tbody>
-                </table>
+                        <div ref={logsEndRef} />
+                    </>
+                )}
             </div>
         </div>
     );

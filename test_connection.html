@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Frontend-Backend Connection</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+
+        button:hover {
+            background: #45a049;
+        }
+
+        .result {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .success {
+            color: green;
+        }
+
+        .error {
+            color: red;
+        }
+
+        input {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🔍 Test Kết Nối Frontend-Backend</h1>
+
+        <!-- Test 1: Kiểm tra backend hoạt động -->
+        <div class="test-section">
+            <h3>Test 1: Kiểm tra Backend đang chạy</h3>
+            <button onclick="testBackendHealth()">Test Backend Health</button>
+            <div id="health-result" class="result"></div>
+        </div>
+
+        <!-- Test 2: Test autocomplete search -->
+        <div class="test-section">
+            <h3>Test 2: Test Autocomplete Search API</h3>
+            <input type="text" id="search-input" placeholder="Nhập tên (VD: Obama, Einstein...)">
+            <button onclick="testSearch()">Test Search</button>
+            <div id="search-result" class="result"></div>
+        </div>
+
+        <!-- Test 3: Test shortest path -->
+        <div class="test-section">
+            <h3>Test 3: Test Shortest Path API</h3>
+            <input type="text" id="start-page" placeholder="Start Page (VD: Barack Obama)">
+            <input type="text" id="end-page" placeholder="End Page (VD: Albert Einstein)">
+            <button onclick="testShortestPath()">Test Shortest Path</button>
+            <div id="path-result" class="result"></div>
+        </div>
+    </div>
+
+    <script>
+        const BACKEND_URL = 'http://127.0.0.1:8080';
+
+        async function testBackendHealth() {
+            const resultDiv = document.getElementById('health-result');
+            resultDiv.innerHTML = '⏳ Đang kiểm tra...';
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/`);
+                const data = await response.json();
+                resultDiv.innerHTML = `<span class="success">✅ Backend đang hoạt động!</span>\n${JSON.stringify(data, null, 2)}`;
+            } catch (error) {
+                resultDiv.innerHTML = `<span class="error">❌ Lỗi kết nối:</span>\n${error.message}`;
+            }
+        }
+
+        async function testSearch() {
+            const query = document.getElementById('search-input').value;
+            const resultDiv = document.getElementById('search-result');
+
+            if (!query) {
+                resultDiv.innerHTML = '<span class="error">⚠️ Vui lòng nhập từ khóa tìm kiếm</span>';
+                return;
+            }
+
+            resultDiv.innerHTML = '⏳ Đang tìm kiếm...';
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/api/search?q=${encodeURIComponent(query)}`);
+                const data = await response.json();
+                resultDiv.innerHTML = `<span class="success">✅ API Search hoạt động!</span>\nKết quả (${data.length} mục):\n${JSON.stringify(data, null, 2)}`;
+            } catch (error) {
+                resultDiv.innerHTML = `<span class="error">❌ Lỗi:</span>\n${error.message}`;
+            }
+        }
+
+        async function testShortestPath() {
+            const startPage = document.getElementById('start-page').value;
+            const endPage = document.getElementById('end-page').value;
+            const resultDiv = document.getElementById('path-result');
+
+            if (!startPage || !endPage) {
+                resultDiv.innerHTML = '<span class="error">⚠️ Vui lòng nhập cả Start Page và End Page</span>';
+                return;
+            }
+
+            resultDiv.innerHTML = '⏳ Đang tìm đường đi...';
+            let logs = '';
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/api/shortest-path`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        start_page: startPage,
+                        end_page: endPage
+                    }),
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+
+                    for (let i = 0; i < lines.length - 1; i++) {
+                        const line = lines[i].trim();
+                        if (line) {
+                            try {
+                                const data = JSON.parse(line);
+                                logs += `\n${JSON.stringify(data, null, 2)}`;
+                                resultDiv.innerHTML = `<span class="success">📡 Đang nhận dữ liệu streaming...</span>${logs}`;
+                            } catch (e) {
+                                console.error("Error parsing JSON:", e);
+                            }
+                        }
+                    }
+
+                    buffer = lines[lines.length - 1];
+                }
+
+                resultDiv.innerHTML = `<span class="success">✅ Hoàn thành!</span>${logs}`;
+            } catch (error) {
+                resultDiv.innerHTML = `<span class="error">❌ Lỗi:</span>\n${error.message}\n\nChi tiết:\n${error.stack}`;
+            }
+        }
+    </script>
+</body>
+
+</html>

@@ -2,10 +2,14 @@ import os
 import json
 import google.generativeai as genai
 from typing import List, Dict, Any, Optional
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure API Key
-# It's best to set this in your environment variables: export GEMINI_API_KEY="your_key"
 GENAI_API_KEY = os.environ.get("GEMINI_API_KEY")
+print(f"[LLM_CLIENT] GEMINI_API_KEY loaded: {bool(GENAI_API_KEY)}")
 if GENAI_API_KEY:
     genai.configure(api_key=GENAI_API_KEY)
 
@@ -122,35 +126,45 @@ async def verify_relations(wiki_text: str, subject_name: str, target_name: str, 
     - **Context Text:** "{context_text}"
 
     ### TASK
-    Analyze the "Context Text" and filter the "Candidate Links" based on strict rules.
+    Analyze the "Context Text" and filter the "Candidate Links" based on VERY RELAXED rules.
 
-    ### FILTERING RULES (RELAXED)
-    1. **TRUE CONNECTION (KEEP):**
-       - **ANY** person mentioned in a positive or neutral context.
-       - Professional associates (co-stars, band members, producers, collaborators).
-       - Family, friends, partners.
-       - Political figures, leaders, or historical figures mentioned in relation to the subject.
-       - **Bridge Figures:** Politicians, Presidents, Activists are HIGH PRIORITY.
+    ### FILTERING RULES (EXTREMELY PERMISSIVE - FAVOR INCLUSION)
+    1. **INCLUDE (Keep almost everything):**
+       - **ANY** real person mentioned, even in passing
+       - Politicians, presidents, world leaders (CRITICAL FOR BRIDGING)
+       - Historical figures, activists, diplomats
+       - Family, friends, colleagues, co-workers
+       - Anyone mentioned in the same sentence as the subject
+       - People from different domains (music, politics, sports, entertainment)
+       - **SPECIAL PRIORITY:** Politicians and historical figures like presidents, ministers, diplomats - these are BRIDGES
     
-    2. **FALSE CONNECTION (DISCARD):**
-       - Fictional characters.
-       - The subject themselves.
-       - People mentioned ONLY in a "See Also" list without context.
-
-    3. **TARGET PRIORITY:**
-       - If "{target_name}" appears, MUST output it.
+    2. **EXCLUDE (Very minimal - only obvious non-people):**
+       - Fictional characters or characters from TV/movies
+       - The subject themselves ("{subject_name}")
+       - Awards or events (unless it's a person's name)
+    
+    3. **CROSS-DOMAIN CONNECTIONS:**
+       - If the target is in politics/history and subject is in entertainment, PRIORITIZE political figures
+       - If you see any politician, president, or historical leader, INCLUDE THEM
+       - These cross-domain links are ESSENTIAL for bridging different fields
+    
+    4. **BRIDGE DETECTION:**
+       - Mark ANY politician, president, world leader, or historical figure as is_bridge=true
+       - These are the most valuable connections in the game
 
     ### OUTPUT FORMAT
-    Return ONLY valid JSON. Do not write intro text.
+    Return ONLY valid JSON. err on the side of inclusion. When in doubt, INCLUDE the person.
     {{
         "valid_candidates": [
             {{
                 "name": "Exact Name from List",
-                "type": "Relationship Type (e.g., Met, Predecessor)",
-                "is_bridge": true/false (True if this person is likely to lead to {target_name}, e.g., a politician or historical figure)
+                "type": "Brief reason (e.g., 'Mentioned in same context', 'Political figure')",
+                "is_bridge": true/false (True if politician, president, historical leader, diplomat)
             }}
         ]
     }}
+    
+    REMEMBER: It's better to include too many than to miss a connection. The path-finding algorithm will handle the rest.
     """
     
     import re

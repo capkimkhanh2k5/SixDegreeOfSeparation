@@ -1,0 +1,101 @@
+INFO:     Started server process [43062]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+[LLM_CLIENT] GEMINI_API_KEY loaded: True
+Loaded 13 items from cache.
+INFO:     127.0.0.1:59611 - "GET /api/search?q=Taylor HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59618 - "GET /api/search?q=Taylor HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59686 - "GET /api/search?q=Taylor HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59741 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59741 - "GET /assets/index-iGS9i7yi.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59743 - "GET /assets/index-BaEHYHhz.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59752 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59764 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59764 - "GET /assets/index-iGS9i7yi.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59766 - "GET /assets/index-BaEHYHhz.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59786 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59786 - "GET /assets/index-iGS9i7yi.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59788 - "GET /assets/index-BaEHYHhz.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59825 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59825 - "GET /assets/index-4XsSrlfV.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59827 - "GET /assets/index-BaEHYHhz.css HTTP/1.1" 200 OK
+Received request: Start='Taylor Swift', End='Ho Chi Minh'
+INFO:     127.0.0.1:59825 - "POST /api/shortest-path HTTP/1.1" 200 OK
+CACHE HIT: Taylor Swift
+DEBUG: Taylor Swift (forward) - Raw Candidates: 2221
+DEBUG: Taylor Swift - Heuristic Filtered: 2221
+INFO:     127.0.0.1:59833 - "GET /api/search?q=Ho%20Chi%20Minh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59869 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59869 - "GET /assets/index-4XsSrlfV.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59871 - "GET /assets/index-BaEHYHhz.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59869 - "GET /vite.svg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59873 - "GET /api/search?q=Tay HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59876 - "GET /api/search?q=Taylor HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59879 - "GET /api/search?q=Taylor%20 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59879 - "GET /api/search?q=Taylor%20Swift HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59879 - "GET /api/search?q=Kevin%20 HTTP/1.1" 200 OK
+Received request: Start='Taylor Swift', End='Kevin Costner'
+INFO:     127.0.0.1:59886 - "POST /api/shortest-path HTTP/1.1" 200 OK
+CACHE HIT: Taylor Swift
+DEBUG: Taylor Swift (forward) - Raw Candidates: 2221
+DEBUG: Taylor Swift - Heuristic Filtered: 2221
+INFO:     127.0.0.1:59879 - "GET /api/search?q=Kevin%20Costner HTTP/1.1" 200 OK
+DEBUG: Taylor Swift - LLM Verified: 29
+DEBUG: Kevin Costner (backward) - Raw Candidates: 1821
+DEBUG: Kevin Costner - Heuristic Filtered: 1820
+INFO:     127.0.0.1:59897 - "GET /api/search?q=Taylor%20 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59897 - "GET /api/search?q=Taylor%20Swift HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59897 - "GET /api/search?q=Ho%20Chi%20Minh HTTP/1.1" 200 OK
+Received request: Start='Taylor Swift', End='Ho Chi Minh'
+INFO:     127.0.0.1:59897 - "POST /api/shortest-path HTTP/1.1" 200 OK
+CACHE HIT: Taylor Swift
+DEBUG: Taylor Swift (forward) - Raw Candidates: 2221
+DEBUG: Taylor Swift - Heuristic Filtered: 2221
+DEBUG: Taylor Swift - LLM Verified: 29
+DEBUG: Ho Chi Minh (backward) - Raw Candidates: 1907
+DEBUG: Ho Chi Minh - Heuristic Filtered: 1902
+CACHE HIT: Addie L. Wyatt
+DEBUG: Addie L. Wyatt (forward) - Raw Candidates: 164
+DEBUG: Addie L. Wyatt - Heuristic Filtered: 164
+DEBUG: Addie L. Wyatt - LLM Verified: 47
+INFO:     127.0.0.1:59971 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59971 - "GET /assets/index-BFN2g2ba.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59973 - "GET /assets/index-C4Pfy3t8.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59973 - "GET /api/search?q=Ho%20Chi%20Minh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59971 - "GET /api/search?q=Taylor%20Swift HTTP/1.1" 200 OK
+Received request: Start='Taylor Swift', End='Ho Chi Minh'
+CACHE HIT: Taylor Swift
+DEBUG: Taylor Swift (forward) - Raw Candidates: 2221
+DEBUG: Taylor Swift - Heuristic Filtered: 2221
+INFO:     127.0.0.1:59992 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59992 - "GET /assets/index-BFN2g2ba.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59993 - "GET /assets/index-C4Pfy3t8.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60049 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60051 - "GET /assets/index-C4Pfy3t8.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60049 - "GET /assets/index-NmTdxAAt.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60063 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60063 - "GET /assets/index-NmTdxAAt.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60065 - "GET /assets/index-C4Pfy3t8.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60087 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60087 - "GET /assets/index-NmTdxAAt.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60088 - "GET /assets/index-C4Pfy3t8.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60087 - "GET /vite.svg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60087 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60091 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60092 - "GET /assets/index-C4Pfy3t8.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:60091 - "GET /assets/index-NmTdxAAt.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:60091 - "GET /vite.svg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60091 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60135 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60135 - "GET /assets/index-6YejtxUA.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60137 - "GET /assets/index-HVoiszkZ.css HTTP/1.1" 200 OK
+Received request: Start='Taylor Swift', End='Ho Chi Minh'
+INFO:     127.0.0.1:60137 - "POST /api/shortest-path HTTP/1.1" 200 OK
+CACHE HIT: Taylor Swift
+DEBUG: Taylor Swift (forward) - Raw Candidates: 2221
+DEBUG: Taylor Swift - Heuristic Filtered: 2221
+INFO:     127.0.0.1:60144 - "GET /api/search?q=Ho%20Chi%20Minh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60162 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60162 - "GET /assets/index-6YejtxUA.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60164 - "GET /assets/index-HVoiszkZ.css HTTP/1.1" 200 OK

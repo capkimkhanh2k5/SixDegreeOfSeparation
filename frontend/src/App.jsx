@@ -3,12 +3,15 @@ import SearchInput from './SearchInput';
 import ResultTimeline from './ResultTimeline';
 import StatusConsole from './StatusConsole';
 import NeuronAnimation from './NeuronAnimation';
+import ErrorMessage from './ErrorMessage';
+import ThemeToggle from './ThemeToggle';
 
 function App() {
   const [startPage, setStartPage] = useState('');
   const [endPage, setEndPage] = useState('');
   const [loading, setLoading] = useState(false);
   const [path, setPath] = useState(null);
+  const [error, setError] = useState(null);
   // Removed 'view' state as we now use conditional rendering based on data
 
   const handleSearch = async () => {
@@ -16,9 +19,10 @@ function App() {
 
     setLoading(true);
     setPath(null);
+    setError(null); // Clear previous errors
 
     try {
-      const response = await fetch('http://127.0.0.1:8001/api/shortest-path', {
+      const response = await fetch('/api/shortest-path', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -26,55 +30,42 @@ function App() {
         body: JSON.stringify({ start_page: startPage, end_page: endPage }),
       });
 
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
 
-        // Process all complete lines
-        for (let i = 0; i < lines.length - 1; i++) {
-          const line = lines[i].trim();
-          if (line) {
+        for (const line of lines) {
+          if (line.trim()) {
             try {
               const data = JSON.parse(line);
-
-              if (data.status === 'visiting') {
-                // Update status console via a custom event or state if StatusConsole was lifted
-                // Since StatusConsole manages its own logs via props/internal state, 
-                // we need to pass these logs down. 
-                // Ideally, we should lift state, but for now let's dispatch a custom event
-                // or simply rely on the fact that we are loading.
-                // WAIT: StatusConsole currently simulates logs. We need to change that.
-                // Let's emit an event that StatusConsole listens to.
-                window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
-              } else if (data.status === 'finished') {
+              if (data.status === 'finished') {
                 setPath(data.path);
                 setLoading(false);
               } else if (data.status === 'error') {
-                alert(data.message);
+                setError(data.message);
                 setLoading(false);
-              } else if (data.status === 'info') {
+              } else if (data.status === 'info' || data.status === 'visiting') {
                 window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
               }
             } catch (e) {
-              console.error("Error parsing JSON line:", e);
+              console.error('Error parsing JSON:', e);
             }
           }
         }
-
-        // Keep the last incomplete line in buffer
-        buffer = lines[lines.length - 1];
       }
-
     } catch (error) {
-      console.error("Error fetching path:", error);
-      alert("Failed to connect to the server.");
+      console.error('Error fetching data:', error);
+      setError("Connection failed. Please check if backend is running.");
       setLoading(false);
     }
   };
@@ -83,136 +74,156 @@ function App() {
     setStartPage('');
     setEndPage('');
     setPath(null);
+    setError(null);
   };
 
   return (
-    <div className="min-h-screen bg-[#0f172a] text-white flex flex-col items-center p-4 font-sans relative overflow-hidden selection:bg-purple-500 selection:text-white">
-      {/* Animated Background */}
-      <div className="absolute top-0 left-0 w-full h-full overflow-hidden -z-10">
-        <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-purple-900/30 rounded-full mix-blend-screen filter blur-3xl opacity-30 animate-blob"></div>
-        <div className="absolute top-[-10%] right-[-10%] w-[500px] h-[500px] bg-blue-900/30 rounded-full mix-blend-screen filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
-        <div className="absolute bottom-[-20%] left-[20%] w-[500px] h-[500px] bg-pink-900/30 rounded-full mix-blend-screen filter blur-3xl opacity-30 animate-blob animation-delay-4000"></div>
+    <div className="relative min-h-screen overflow-hidden transition-colors duration-500 bg-gray-50 dark:bg-gray-900 font-sans">
+
+      {/* Animated Background Mesh */}
+      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-purple-400/20 dark:bg-purple-900/20 blur-[100px] animate-blob mix-blend-multiply dark:mix-blend-screen" />
+        <div className="absolute top-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-blue-400/20 dark:bg-blue-900/20 blur-[100px] animate-blob animation-delay-2000 mix-blend-multiply dark:mix-blend-screen" />
+        <div className="absolute bottom-[-20%] left-[20%] w-[60%] h-[60%] rounded-full bg-pink-400/20 dark:bg-pink-900/20 blur-[100px] animate-blob animation-delay-4000 mix-blend-multiply dark:mix-blend-screen" />
       </div>
 
-      <header className="mt-12 mb-8 text-center z-10 space-y-6">
-        {/* Modern CapKimKhanh Signature */}
-        <div className="relative group inline-block mb-6 hover:scale-105 transition-transform duration-500">
-          <div className="absolute -inset-1 bg-gradient-to-r from-cyan-400 via-purple-500 to-pink-500 rounded-lg blur opacity-25 group-hover:opacity-75 transition duration-1000 group-hover:duration-200"></div>
-          <div className="relative px-8 py-4 bg-black rounded-lg leading-none flex items-center">
-            <span className="text-gray-400 text-xs font-bold uppercase tracking-widest mr-4 border-r border-gray-700 pr-4">
-              Architected By
-            </span>
-            <span className="font-black text-3xl text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-purple-400 to-pink-400 animate-gradient-x bg-[length:200%_auto]">
-              CapKimKhanh
-            </span>
-          </div>
-        </div>
+      <div className="relative z-10 container mx-auto px-4 py-8 flex flex-col min-h-screen">
 
-        <h1 className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white via-gray-200 to-gray-500 drop-shadow-2xl tracking-tight">
-          Six Degrees
-        </h1>
-
-        <p className="text-gray-400 text-lg max-w-2xl mx-auto font-light leading-relaxed">
-          Explore the hidden connections between any two people on Wikipedia.
-          Powered by <span className="text-purple-400 font-medium">AI-driven analysis</span> to find the shortest factual path through history, politics, and pop culture.
-        </p>
-      </header>
-
-      <main className="w-full max-w-7xl z-10 grid grid-cols-1 lg:grid-cols-2 gap-8 px-4">
-
-        {/* LEFT PANEL: Search Inputs + Status Console */}
-        <div className="bg-gray-900/60 p-8 rounded-3xl shadow-2xl backdrop-blur-xl border border-white/10 transition-all duration-500 hover:border-white/20 flex flex-col h-full min-h-[400px]">
-          <div className="grid grid-cols-1 gap-6 mb-8">
-            <SearchInput
-              label="Start Journey"
-              value={startPage}
-              onChange={setStartPage}
-              placeholder="e.g. Kevin Bacon"
-            />
-            <SearchInput
-              label="Target Destination"
-              value={endPage}
-              onChange={setEndPage}
-              placeholder="e.g. Barack Obama"
-            />
-          </div>
-
-          <button
-            onClick={handleSearch}
-            disabled={loading || !startPage || !endPage}
-            className={`w-full py-4 rounded-2xl font-bold text-xl tracking-wide transition-all duration-300 transform hover:scale-[1.01] shadow-xl mb-6 ${loading || !startPage || !endPage
-              ? 'bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700'
-              : 'bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 text-white shadow-purple-900/50 border border-white/10'
-              }`}
-          >
-            {loading ? (
-              <span className="flex items-center justify-center gap-3">
-                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                Processing Request...
+        {/* Top Navigation */}
+        <header className="flex justify-between items-center mb-8">
+          {/* Logo Area */}
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/30 dark:bg-white/10 backdrop-blur-md rounded-xl border border-white/50 dark:border-white/10 shadow-lg">
+              <svg className="w-8 h-8 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            </div>
+            <div className="flex flex-col">
+              <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 dark:from-indigo-400 dark:via-purple-400 dark:to-pink-400 animate-text-shimmer bg-[length:200%_auto]">
+                Six Degrees
+              </h1>
+              <span className="text-xs font-medium text-gray-500 dark:text-gray-400 tracking-wider">
+                BY <span className="font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-500 to-teal-400 animate-pulse">CAP KIM KHANH</span>
               </span>
-            ) : 'Find Connection'}
-          </button>
-
-          {/* Status Console - Always visible */}
-          <div className="flex-grow overflow-hidden">
-            <StatusConsole loading={loading} />
+            </div>
           </div>
-        </div>
+          <ThemeToggle />
+        </header>
 
-        {/* RIGHT PANEL: Neuron Animation (Idle/Loading) OR Result Timeline */}
-        <div className="min-h-[400px] lg:h-full transition-all duration-500">
-          {path ? (
-            // STATE: RESULT - Show Result Timeline
-            <div className="bg-gray-900/60 p-8 rounded-3xl shadow-2xl backdrop-blur-xl border border-white/10 h-full animate-fadeInUp flex flex-col">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold text-white">Connection Found</h2>
+        {/* Main Content Grid */}
+        <main className="flex-grow grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+
+          {/* LEFT COLUMN: Inputs & Controls */}
+          <div className="space-y-6 animate-fadeInLeft">
+
+            <div className="bg-white/40 dark:bg-gray-800/40 backdrop-blur-xl rounded-3xl p-8 shadow-2xl border border-white/50 dark:border-white/10">
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-3xl font-extrabold text-gray-900 dark:text-white mb-2">
+                    Start Search
+                  </h2>
+                  <p className="text-gray-600 dark:text-gray-300 text-sm">
+                    Find the shortest path between any two Wikipedia articles.
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300 ml-1">Start Article</label>
+                    <SearchInput
+                      value={startPage}
+                      onChange={setStartPage}
+                      placeholder="e.g., Taylor Swift"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300 ml-1">Target Article</label>
+                    <SearchInput
+                      value={endPage}
+                      onChange={setEndPage}
+                      placeholder="e.g., Kevin Bacon"
+                    />
+                  </div>
+                </div>
+
                 <button
-                  onClick={handleReset}
-                  className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-sm font-medium transition-colors"
+                  onClick={handleSearch}
+                  disabled={loading || !startPage || !endPage}
+                  className={`
+                    w-full group relative px-8 py-4 rounded-2xl font-bold text-lg shadow-xl transition-all duration-300
+                    ${loading || !startPage || !endPage
+                      ? 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
+                      : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white hover:scale-[1.02] hover:shadow-indigo-500/25'
+                    }
+                  `}
                 >
-                  Clear Results
+                  {loading ? (
+                    <div className="flex items-center justify-center gap-2">
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>Searching...</span>
+                    </div>
+                  ) : (
+                    <span className="flex items-center justify-center gap-2">
+                      Find Connection
+                      <svg className="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                      </svg>
+                    </span>
+                  )}
                 </button>
               </div>
-              <div className="flex-grow overflow-y-auto custom-scrollbar">
+            </div>
+
+            {/* Status Console (Always visible or conditional?) - User said "below is the table showing process" */}
+            <div className="h-[300px]">
+              <StatusConsole loading={loading} />
+            </div>
+
+            {error && (
+              <ErrorMessage
+                message={error}
+                onDismiss={() => setError(null)}
+              />
+            )}
+
+          </div>
+
+          {/* RIGHT COLUMN: Visualization / Results */}
+          <div className="relative h-full min-h-[500px] bg-white/20 dark:bg-gray-800/20 backdrop-blur-sm rounded-3xl border border-white/30 dark:border-white/5 overflow-hidden flex flex-col animate-fadeInRight">
+
+            {!path ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center overflow-hidden">
+                <div className="w-full h-full absolute inset-0">
+                  <NeuronAnimation />
+                </div>
+              </div>
+            ) : (
+              <div className="flex-grow flex flex-col p-6 overflow-y-auto custom-scrollbar">
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Connection Found!</h2>
+                  <button
+                    onClick={handleReset}
+                    className="px-4 py-2 rounded-xl bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors font-medium text-sm"
+                  >
+                    Reset
+                  </button>
+                </div>
                 <ResultTimeline path={path} />
               </div>
-            </div>
-          ) : (
-            // STATE: IDLE or LOADING - Always show Neuron Animation
-            <div className="h-full min-h-[400px]">
-              <NeuronAnimation />
-            </div>
-          )}
-        </div>
+            )}
+          </div>
 
-      </main>
+        </main>
 
-      <footer className="mt-auto py-12 flex flex-col items-center gap-6 w-full max-w-4xl">
-
-        {/* Tech Stack Badges */}
-        <div className="flex flex-wrap justify-center gap-3">
-          {[
-            { name: "Google Gemini 2.5", color: "bg-blue-500/20 text-blue-300 border-blue-500/30" },
-            { name: "FastAPI", color: "bg-teal-500/20 text-teal-300 border-teal-500/30" },
-            { name: "Bi-directional BFS", color: "bg-purple-500/20 text-purple-300 border-purple-500/30" },
-            { name: "React + Vite", color: "bg-cyan-500/20 text-cyan-300 border-cyan-500/30" },
-            { name: "Tailwind CSS", color: "bg-pink-500/20 text-pink-300 border-pink-500/30" },
-          ].map((tech) => (
-            <span key={tech.name} className={`px-4 py-1.5 rounded-full text-xs font-semibold border backdrop-blur-sm ${tech.color}`}>
-              {tech.name}
-            </span>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-4 text-gray-500 text-sm font-medium">
-          <span>Powered by Wikipedia API</span>
-          <span className="w-1 h-1 bg-gray-600 rounded-full"></span>
-          <span>v2.0.0 Strict Mode</span>
-        </div>
-      </footer>
+        <footer className="mt-8 py-6 flex flex-col items-center gap-4 w-full border-t border-gray-200 dark:border-gray-800">
+          <div className="flex items-center gap-4 text-gray-500 text-sm font-medium">
+            <span>Powered by Wikipedia API</span>
+            <span className="w-1 h-1 bg-gray-600 rounded-full"></span>
+            <span>v2.1.0 Premium UI</span>
+          </div>
+        </footer>
+      </div>
     </div>
   );
 }
