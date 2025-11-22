@@ -16,7 +16,7 @@ uvicorn backend.main:app --reload --port 8001 &
 
 echo "Starting Frontend..."
 cd frontend
-npm run dev &
+npm run dev -- --port 8000 &
 
 # Wait for all background processes
 wait

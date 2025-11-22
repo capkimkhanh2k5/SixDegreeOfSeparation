@@ -1,7 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
 
 const StatusConsole = ({ loading }) => {
-    const [logs, setLogs] = useState([]);
+    const [logs, setLogs] = useState([{
+        time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        step: "•",
+        message: "System ready. Enter search parameters and click 'Find Connection' to begin."
+    }]);
     const logsEndRef = useRef(null);
 
     useEffect(() => {
@@ -32,13 +36,6 @@ const StatusConsole = ({ loading }) => {
             return () => {
                 window.removeEventListener('bfs-log', handleLog);
             };
-        } else {
-            // Idle state
-            setLogs([{
-                time: new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-                step: "•",
-                message: "System ready. Enter search parameters and click 'Find Connection' to begin."
-            }]);
         }
     }, [loading]);
 
@@ -47,7 +44,8 @@ const StatusConsole = ({ loading }) => {
         logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [logs]);
 
-    if (!loading) return null;
+    // Removed early return to keep console visible
+
 
     return (
         <div className="w-full mt-8 bg-black/80 rounded-xl border border-green-500/30 overflow-hidden shadow-[0_0_30px_rgba(0,255,0,0.1)] font-mono text-sm">

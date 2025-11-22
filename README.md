@@ -1,55 +1,112 @@
-# Six Degrees of Wikipedia
+# 🌐 Six Degrees of Separation - AI Enhanced
 
-A web application that finds the shortest path between two Wikipedia pages using Bi-directional Breadth-First Search (BFS).
+> **Discover the hidden connections between any two people on Wikipedia using Bi-directional BFS and LLM-powered Entity Extraction.**
 
-## Features
-- **Bi-directional BFS**: Efficiently finds the shortest path by searching from both ends.
-- **Async API Calls**: Uses `httpx` for fast, concurrent Wikipedia API requests.
-- **Modern UI**: React + Tailwind CSS with dark mode, autocomplete, and animations.
-- **Interactive Visualization**: Displays the path as a vertical timeline.
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![React](https://img.shields.io/badge/react-18.0%2B-blue)
+![Gemini](https://img.shields.io/badge/AI-Gemini-orange)
 
-## Tech Stack
-- **Backend**: Python, FastAPI, Uvicorn, httpx
-- **Frontend**: React, Vite, Tailwind CSS
+## 📖 Overview
 
-## Installation & Running
+**Six Degrees of Separation** is a sophisticated web application that explores the "small world" theory within the vast network of Wikipedia. By leveraging a **Bi-directional Breadth-First Search (BFS)** algorithm, it finds the shortest path between two people.
+
+🚀 **New in v2.0**: We have integrated **Google Gemini AI** to revolutionize link extraction. Instead of relying on simple hyperlinks, our system now analyzes the *context* of the text to ensure connections are **factual, direct, and mutual**, filtering out mere comparisons or passing mentions.
+
+## ✨ Key Features
+
+- **🧠 AI-Powered Precision**: Uses LLMs to extract only valid relationships (Family, Co-stars, Rivals) and ignore noise.
+- **⚡ High-Performance BFS**: Bi-directional search algorithm minimizes the search space for rapid results.
+- **🔄 Async Architecture**: Built with `FastAPI` and `httpx` for concurrent, non-blocking Wikipedia API requests.
+- **🎨 Immersive UI**: A stunning, dark-mode React interface with particle animations and a timeline visualization.
+- **📜 Live Execution Log**: Watch the algorithm "think" in real-time with a detailed status console.
+
+## 🛠️ Tech Stack
+
+### Backend
+- **Language**: Python 3.8+
+- **Framework**: FastAPI
+- **AI Integration**: Google Generative AI (Gemini)
+- **Networking**: httpx (Async HTTP)
+
+### Frontend
+- **Framework**: React (Vite)
+- **Styling**: Tailwind CSS
+- **Animations**: HTML5 Canvas
+
+## 🚀 Installation & Setup
 
 ### Prerequisites
-- Python 3.8+
-- Node.js 16+
+- **Python 3.8+**
+- **Node.js 16+**
+- **Google Gemini API Key** (Get one [here](https://aistudio.google.com/app/apikey))
 
-### 1. Backend Setup
+### 1. Clone the Repository
+```bash
+git clone https://github.com/capkimkhanh2k5/SixDegreeOfSeparation.git
+cd SixDegreeOfSeparation
+```
+
+### 2. Backend Setup
 ```bash
 # Create virtual environment
 python3 -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
-pip install fastapi uvicorn httpx
+pip install -r requirements.txt
+# Or manually: pip install fastapi uvicorn httpx google-generativeai python-dotenv
 
-# Run the server
-uvicorn backend.main:app --reload --port 8001
+# Configure Environment Variables
+# Create a .env file in the root directory
+echo "GEMINI_API_KEY=your_api_key_here" > .env
 ```
-The API will be available at `http://127.0.0.1:8001`.
 
-### 2. Frontend Setup
+### 3. Frontend Setup
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
+```
 
-# Run the dev server
+## 🏃‍♂️ Running the Application
+
+We provide a convenient script to start both services:
+
+```bash
+# From the root directory
+./run.sh
+```
+
+Or run them manually:
+
+**Backend:**
+```bash
+source venv/bin/activate
+uvicorn backend.main:app --reload --port 8001
+```
+
+**Frontend:**
+```bash
+cd frontend
 npm run dev
 ```
-The app will be available at `http://localhost:5173`.
 
-## Usage
-1. Enter a **Start Person/Page** (e.g., "Kevin Bacon").
-2. Enter a **Target Person/Page** (e.g., "Barack Obama").
-3. Click **Find Path**.
-4. Watch the spinner while the algorithm searches.
-5. View the shortest path connecting the two pages!
+Access the application at: `http://localhost:5173`
 
-## License
-MIT
+## 🎮 Usage Guide
+
+1.  **Enter Start & End**: Type the names of two people (e.g., "Sơn Tùng M-TP" and "Snoop Dogg").
+2.  **Initiate Search**: Click **"Find Connection"**.
+3.  **Monitor Progress**: The Status Console will show the real-time crawling and AI filtering process.
+4.  **View Results**: Once found, the path is displayed as an interactive timeline.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 📄 License
+
+This project is licensed under the MIT License.
+
+---
+*Designed & Developed by **CapKimKhanh***

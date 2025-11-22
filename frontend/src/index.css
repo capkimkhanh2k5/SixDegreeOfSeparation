@@ -29,6 +29,21 @@
   animation: text-shimmer 3s linear infinite;
 }
 
+@keyframes gradient-x {
+  0%, 100% {
+    background-size: 200% 200%;
+    background-position: left center;
+  }
+  50% {
+    background-size: 200% 200%;
+    background-position: right center;
+  }
+}
+
+.animate-gradient-x {
+  animation: gradient-x 3s ease infinite;
+}
+
 @keyframes blob {
   0% {
     transform: translate(0px, 0px) scale(1);

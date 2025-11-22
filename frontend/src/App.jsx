@@ -95,22 +95,27 @@ function App() {
       </div>
 
       <header className="mt-12 mb-8 text-center z-10 space-y-6">
-        {/* Copyright / Signature - Prominent & Large */}
-        <div className="relative group inline-block mb-4 hover:scale-105 transition-transform duration-500">
-          <div className="absolute -inset-4 bg-gradient-to-r from-pink-600 via-purple-600 to-cyan-600 rounded-2xl blur-xl opacity-60 group-hover:opacity-100 transition duration-500 animate-tilt"></div>
-          <div className="relative px-10 py-5 bg-black/60 backdrop-blur-2xl rounded-2xl border border-white/20 shadow-2xl">
-            <div className="flex flex-col items-center gap-2">
-              <span className="text-gray-300 text-sm font-bold uppercase tracking-[0.3em] text-shadow-sm">Designed & Developed by</span>
-              <span className="font-black text-5xl md:text-6xl text-transparent bg-clip-text bg-gradient-to-r from-pink-400 via-purple-400 to-cyan-400 animate-text-shimmer bg-[length:200%_auto] drop-shadow-[0_0_25px_rgba(192,132,252,0.6)] filter contrast-125">
-                CapKimKhanh
-              </span>
-            </div>
+        {/* Modern CapKimKhanh Signature */}
+        <div className="relative group inline-block mb-6 hover:scale-105 transition-transform duration-500">
+          <div className="absolute -inset-1 bg-gradient-to-r from-cyan-400 via-purple-500 to-pink-500 rounded-lg blur opacity-25 group-hover:opacity-75 transition duration-1000 group-hover:duration-200"></div>
+          <div className="relative px-8 py-4 bg-black rounded-lg leading-none flex items-center">
+            <span className="text-gray-400 text-xs font-bold uppercase tracking-widest mr-4 border-r border-gray-700 pr-4">
+              Architected By
+            </span>
+            <span className="font-black text-3xl text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-purple-400 to-pink-400 animate-gradient-x bg-[length:200%_auto]">
+              CapKimKhanh
+            </span>
           </div>
         </div>
 
         <h1 className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white via-gray-200 to-gray-500 drop-shadow-2xl tracking-tight">
           Six Degrees
         </h1>
+
+        <p className="text-gray-400 text-lg max-w-2xl mx-auto font-light leading-relaxed">
+          Explore the hidden connections between any two people on Wikipedia.
+          Powered by <span className="text-purple-400 font-medium">AI-driven analysis</span> to find the shortest factual path through history, politics, and pop culture.
+        </p>
       </header>
 
       <main className="w-full max-w-7xl z-10 grid grid-cols-1 lg:grid-cols-2 gap-8 px-4">
@@ -185,10 +190,28 @@ function App() {
 
       </main>
 
-      <footer className="mt-auto py-8 text-gray-600 text-sm font-medium flex gap-6">
-        <span>Powered by Wikipedia API</span>
-        <span>•</span>
-        <span>Bi-directional BFS</span>
+      <footer className="mt-auto py-12 flex flex-col items-center gap-6 w-full max-w-4xl">
+
+        {/* Tech Stack Badges */}
+        <div className="flex flex-wrap justify-center gap-3">
+          {[
+            { name: "Google Gemini 2.5", color: "bg-blue-500/20 text-blue-300 border-blue-500/30" },
+            { name: "FastAPI", color: "bg-teal-500/20 text-teal-300 border-teal-500/30" },
+            { name: "Bi-directional BFS", color: "bg-purple-500/20 text-purple-300 border-purple-500/30" },
+            { name: "React + Vite", color: "bg-cyan-500/20 text-cyan-300 border-cyan-500/30" },
+            { name: "Tailwind CSS", color: "bg-pink-500/20 text-pink-300 border-pink-500/30" },
+          ].map((tech) => (
+            <span key={tech.name} className={`px-4 py-1.5 rounded-full text-xs font-semibold border backdrop-blur-sm ${tech.color}`}>
+              {tech.name}
+            </span>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-4 text-gray-500 text-sm font-medium">
+          <span>Powered by Wikipedia API</span>
+          <span className="w-1 h-1 bg-gray-600 rounded-full"></span>
+          <span>v2.0.0 Strict Mode</span>
+        </div>
       </footer>
     </div>
   );

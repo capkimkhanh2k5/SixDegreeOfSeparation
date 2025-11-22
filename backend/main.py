@@ -4,13 +4,17 @@ from pydantic import BaseModel
 from typing import List, Optional
 import httpx
 from .bfs import find_shortest_path
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 app = FastAPI()
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"], # Vite default port
+    allow_origins=["http://localhost:8000"], # Updated to port 8000
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -47,7 +51,7 @@ async def get_page_details(titles: List[str]) -> List[PageDetail]:
     }
     
     headers = {
-        "User-Agent": "SixDegreesOfWikipedia/1.0 (https://github.com/yourusername/six-degrees-wikipedia; your@email.com)"
+        "User-Agent": "SixDegreesOfWikipedia/1.0 (https://github.com/capkimkhanh2k5/SixDegreeOfSeparation; capkimkhanh2k5@gmail.com)"
     }
     
     details_map = {}
@@ -90,7 +94,7 @@ async def search_wikipedia(q: str = Query(..., min_length=1)):
     }
     
     headers = {
-        "User-Agent": "SixDegreesOfWikipedia/1.0 (https://github.com/yourusername/six-degrees-wikipedia; your@email.com)"
+        "User-Agent": "SixDegreesOfWikipedia/1.0 (https://github.com/capkimkhanh2k5/SixDegreeOfSeparation; capkimkhanh2k5@gmail.com)"
     }
     
     async with httpx.AsyncClient(headers=headers) as client:
@@ -117,17 +121,19 @@ async def search_wikipedia(q: str = Query(..., min_length=1)):
                 "king", "queen", "prince", "princess", "president", "minister",
                 "artist", "writer", "director", "musician", "rapper", "model",
                 "comedian", "philosopher", "scientist", "inventor", "business",
-                "magnate", "monarch", "emperor", "footballer", "athlete", "given name"
+                "magnate", "monarch", "emperor", "footballer", "athlete", "given name",
+                "socialite", "personality", "human", "people"
             ]
             
             # Keywords that strongly suggest non-people (Strict Mode)
             exclude_keywords = [
-                "film", "movie", "series", "episode", 
+                "film", "movie", "series", "episode", "album", "song", "band", "group",
                 "novel", "book", "video game", "television", "show", "franchise",
                 "soundtrack", "discography", "bridge", "structure", "building", 
-                "transport", "station", "airport", "park", "place", "city", 
+                "transport", "station", "airport", "park", "place", "city", "capital",
                 "village", "town", "district", "province", "state", "country",
-                "river", "mountain", "lake", "sea", "ocean", "island"
+                "river", "mountain", "lake", "sea", "ocean", "island", "planet",
+                "disambiguation", "list of"
             ]
             
             filtered_titles = []
@@ -136,17 +142,30 @@ async def search_wikipedia(q: str = Query(..., min_length=1)):
                 description = page.get("terms", {}).get("description", [""])[0].lower()
                 title_lower = title.lower()
                 
+                # Explicit exclusions based on title patterns
+                if any(x in title_lower for x in ["(band)", "(album)", "(song)", "(city)", "(planet)", "(place)"]):
+                    continue
+                
                 # Check if it's likely a person
                 is_person = any(k in description for k in person_keywords)
-                is_excluded = any(k in description for k in exclude_keywords) or \
-                              "(film)" in title_lower or "(movie)" in title_lower or \
-                              "(song)" in title_lower or "(band)" in title_lower or \
-                              "bridge" in title_lower or "station" in title_lower
+                is_excluded = any(k in description for k in exclude_keywords)
+                
+                # Special case for "Paris" -> "Paris" (City) vs "Paris Hilton"
+                # If title is exactly a city name, and description confirms it, exclude.
+                if title == "Paris" and "capital" in description:
+                    continue
                 
                 # If description is empty, we might want to include it if it looks like a name (heuristic)
-                # But for now, let's be strict or allow if no exclusion keywords found
-                if (is_person or not description) and not is_excluded:
+                # But for strict mode, we prefer description to match person_keywords OR not match exclude_keywords
+                if (is_person) or (not description and not is_excluded):
                     filtered_titles.append(title)
+                elif not is_excluded and not is_person:
+                    # Ambiguous case: "Paris Hilton" might just say "American media personality" (caught by person_keywords)
+                    # "Linkin Park" -> "American rock band" (caught by exclude_keywords)
+                    # If it's not explicitly excluded, and not explicitly a person, we might check title structure?
+                    # For now, let's be strict: if it has NO person keywords, and NO exclude keywords, maybe include?
+                    # But "Linkin Park" has "band" in description.
+                    pass
                     
             return filtered_titles
             
