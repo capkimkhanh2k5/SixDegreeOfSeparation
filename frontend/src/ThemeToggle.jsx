@@ -29,7 +29,7 @@ const ThemeToggle = () => {
     return (
         <button
             onClick={toggleTheme}
-            data-testid="theme-toggle"
+            data-testid="theme-btn"
             className="relative p-2 rounded-full bg-white/20 dark:bg-black/20 backdrop-blur-lg border border-white/30 dark:border-white/10 shadow-lg hover:scale-110 transition-all duration-300 group"
             aria-label="Toggle Dark Mode"
         >

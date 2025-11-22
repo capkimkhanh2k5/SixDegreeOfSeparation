@@ -99,3 +99,68 @@ INFO:     127.0.0.1:60144 - "GET /api/search?q=Ho%20Chi%20Minh HTTP/1.1" 200 OK
 INFO:     127.0.0.1:60162 - "GET / HTTP/1.1" 200 OK
 INFO:     127.0.0.1:60162 - "GET /assets/index-6YejtxUA.js HTTP/1.1" 200 OK
 INFO:     127.0.0.1:60164 - "GET /assets/index-HVoiszkZ.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60196 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60196 - "GET /assets/index-6YejtxUA.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60198 - "GET /assets/index-HVoiszkZ.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60237 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60238 - "GET /assets/index-HVoiszkZ.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:60237 - "GET /assets/index-6YejtxUA.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:60237 - "GET /vite.svg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60237 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60237 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60237 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60237 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60237 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60259 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60259 - "GET /assets/index-6YejtxUA.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60260 - "GET /assets/index-HVoiszkZ.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60259 - "GET /vite.svg HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60274 - "GET /api/search?q=Taylor%20Swift HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60277 - "GET /api/search?q=Kevin%20Bacon HTTP/1.1" 200 OK
+Received request: Start='Taylor Swift', End='Kevin Bacon'
+INFO:     127.0.0.1:60274 - "POST /api/shortest-path HTTP/1.1" 200 OK
+CACHE HIT: Taylor Swift
+DEBUG: Taylor Swift (forward) - Raw Candidates: 2221
+DEBUG: Taylor Swift - Heuristic Filtered: 2221
+DEBUG: Taylor Swift - LLM Verified: 18
+DEBUG: Kevin Bacon (backward) - Raw Candidates: 918
+DEBUG: Kevin Bacon - Heuristic Filtered: 917
+CACHE HIT: Adolf Hitler
+DEBUG: Adolf Hitler (forward) - Raw Candidates: 2134
+DEBUG: Adolf Hitler - Heuristic Filtered: 2134
+DEBUG: Adolf Hitler - LLM Verified: 20
+CACHE HIT: A. R. Rahman
+DEBUG: A. R. Rahman (forward) - Raw Candidates: 2185
+DEBUG: A. R. Rahman - Heuristic Filtered: 2185
+DEBUG: A. R. Rahman - LLM Verified: 9
+CACHE HIT: Aaron Dessner
+DEBUG: Aaron Dessner (forward) - Raw Candidates: 268
+DEBUG: Aaron Dessner - Heuristic Filtered: 268
+DEBUG: Aaron Dessner - LLM Verified: 27
+DEBUG: Pagination triggered for Adele...
+DEBUG: Pagination triggered for Adele...
+DEBUG: Pagination triggered for Adele...
+DEBUG: Adele (forward) - Raw Candidates: 1884
+DEBUG: Adele - Heuristic Filtered: 1884
+DEBUG: Adele - LLM Verified: 1
+DEBUG: Akon (forward) - Raw Candidates: 371
+DEBUG: Akon - Heuristic Filtered: 371
+DEBUG: Akon - LLM Verified: 29
+INFO:     127.0.0.1:60311 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60312 - "GET /assets/index-HVoiszkZ.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:60311 - "GET /assets/index-6YejtxUA.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:60326 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60328 - "GET /assets/index-HVoiszkZ.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:60326 - "GET /assets/index-6YejtxUA.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:60351 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60351 - "GET /assets/index-6YejtxUA.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60353 - "GET /assets/index-HVoiszkZ.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60371 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60371 - "GET /assets/index-HVoiszkZ.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:60373 - "GET /assets/index-6YejtxUA.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:60376 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60377 - "GET /assets/index-6YejtxUA.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:60376 - "GET /assets/index-HVoiszkZ.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:60413 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60413 - "GET /assets/index-BE0g4h5t.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60415 - "GET /assets/index-HVoiszkZ.css HTTP/1.1" 200 OK
