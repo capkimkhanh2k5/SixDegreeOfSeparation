@@ -13,6 +13,8 @@
 
 🚀 **New in v2.0**: We have integrated **Google Gemini AI** to revolutionize link extraction. Instead of relying on simple hyperlinks, our system now analyzes the *context* of the text to ensure connections are **factual, direct, and mutual**, filtering out mere comparisons or passing mentions.
 
+![Home Page](assets/home_dark.png)
+
 ## ✨ Key Features
 
 - **🧠 AI-Powered Precision**: Uses LLMs to extract only valid relationships (Family, Co-stars, Rivals) and ignore noise.
@@ -20,6 +22,15 @@
 - **🔄 Async Architecture**: Built with `FastAPI` and `httpx` for concurrent, non-blocking Wikipedia API requests.
 - **🎨 Immersive UI**: A stunning, dark-mode React interface with particle animations and a timeline visualization.
 - **📜 Live Execution Log**: Watch the algorithm "think" in real-time with a detailed status console.
+
+## 🎥 Demo
+
+Watch the AI find a connection between **Taylor Swift** and **Kanye West**:
+
+https://github.com/user-attachments/assets/demo.webm
+*(Note: Video is stored locally in `assets/demo.webm`)*
+
+![Search Result](assets/search_result.png)
 
 ## 🛠️ Tech Stack
 
@@ -91,7 +102,7 @@ cd frontend
 npm run dev
 ```
 
-Access the application at: `http://localhost:5173`
+Access the application at: `http://localhost:5173` (or `http://localhost:8000` if using the unified server).
 
 ## 🎮 Usage Guide
 
