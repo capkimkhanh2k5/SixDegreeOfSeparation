@@ -132,11 +132,10 @@ class BFS_Search:
                 
                 valid_neighbors = [obj["name"] for obj in verified_objs]
                 
-                # Fallback: If LLM returns nothing (strict filter?), use heuristic candidates
-                # This prevents dead ends due to over-filtering
-                if not valid_neighbors and filtered_candidates:
-                    print(f"DEBUG: {current_node} - LLM returned 0, falling back to heuristic (first 20)")
-                    valid_neighbors = filtered_candidates[:20]
+                # Fallback: If LLM returns nothing, we respect that decision.
+                # This prevents adding noise when no real connections exist.
+                if not valid_neighbors:
+                    print(f"DEBUG: {current_node} - LLM returned 0. Strict filtering applied.")
             else:
                 # Backward search: Just use links (LLM verification is harder backwards without context)
                 valid_neighbors = filtered_candidates
@@ -259,20 +258,41 @@ class BFS_Search:
             return "", []
 
     def heuristic_filter(self, candidates: List[str]) -> List[str]:
-        # Filter out obvious non-people, but keep everything else
-        # Made less restrictive to improve path finding
+        # Filter out obvious non-people
         filtered = []
+        
+        # Keywords that strongly suggest non-people (lowercase for easier matching)
+        exclude_keywords = [
+            "list of", "award", "film", "movie", "album", "song", "band", "group",
+            "discography", "videography", "bibliography", "tour", "concert",
+            "season", "episode", "game", "championship", "tournament", "cup",
+            "university", "college", "school", "hospital", "station", "airport",
+            "park", "bridge", "building", "street", "avenue", "road", "highway",
+            "river", "lake", "mountain", "ocean", "sea", "island", "bay",
+            "template:", "category:", "portal:", "help:", "wikipedia:", "file:",
+            "(city)", "(place)", "republic", "kingdom", "empire", "state", "province",
+            "war", "battle", "treaty", "history", "politics", "election",
+            "company", "organization", "party", "government", "agency",
+            "location", "place", "city", "country", "architecture", "structure",
+            "series", "show", "single", "record", "family"
+        ]
+        
         for c in candidates:
             # Skip years/dates that are just numbers
             if c.isdigit(): continue
-            if len(c) <= 3 and c[0].isdigit(): continue  # Skip short year-like strings
+            if len(c) <= 3 and c[0].isdigit(): continue
             
-            # Skip Wikipedia meta pages
-            if "Wikipedia:" in c: continue
-            if "Help:" in c: continue
-            if "Template:" in c: continue
+            # Check against exclusion keywords (case-insensitive)
+            c_lower = c.lower()
+            is_excluded = False
+            for k in exclude_keywords:
+                if k in c_lower:
+                    is_excluded = True
+                    break
             
-            # Keep everything else including "List of" which might have people
+            if is_excluded: continue
+            
+            # Keep everything else
             filtered.append(c)
         return filtered
 

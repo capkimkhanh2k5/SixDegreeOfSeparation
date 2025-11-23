@@ -31,6 +31,7 @@ def generate_extraction_prompt(wiki_text: str, subject_name: str) -> str:
        - Historical interactions (signed a treaty with, battled against, succeeded/preceded in office).
     
     2. **EXCLUDE (Invalid/Noise):**
+       - **NON-PEOPLE (CRITICAL):** Do NOT extract movies, albums, songs, bands, organizations, places, awards, or events.
        - **Comparisons:** "He is often compared to [Person B]", "She writes like [Person C]".
        - **Inspirations (Passive):** "He was inspired by [Person D]" (unless they actually met).
        - **Name Dropping/Lists:** "He is in the list of Time 100 alongside [Person E]" (unless they interacted).
@@ -126,45 +127,39 @@ async def verify_relations(wiki_text: str, subject_name: str, target_name: str, 
     - **Context Text:** "{context_text}"
 
     ### TASK
-    Analyze the "Context Text" and filter the "Candidate Links" based on VERY RELAXED rules.
+    Analyze the "Candidate Links" and determine if they have a **factual, direct connection** to the "Current Subject".
+    You should use the provided "Context Text" as a primary source, but **YOU MAY USE YOUR INTERNAL KNOWLEDGE** to verify well-known public connections (e.g., partners, family, famous feuds) if they are missing from the text.
 
-    ### FILTERING RULES (EXTREMELY PERMISSIVE - FAVOR INCLUSION)
-    1. **INCLUDE (Keep almost everything):**
-       - **ANY** real person mentioned, even in passing
-       - Politicians, presidents, world leaders (CRITICAL FOR BRIDGING)
-       - Historical figures, activists, diplomats
-       - Family, friends, colleagues, co-workers
-       - Anyone mentioned in the same sentence as the subject
-       - People from different domains (music, politics, sports, entertainment)
-       - **SPECIAL PRIORITY:** Politicians and historical figures like presidents, ministers, diplomats - these are BRIDGES
+    ### FILTERING RULES (STRICT - DIRECT CONNECTIONS ONLY)
+    1. **INCLUDE (Valid Connections):**
+       - **Direct Interaction:** People who have met, worked together, or had a significant public interaction with the subject.
+       - **Family & Partners:** Spouse, parents, children, siblings, partners.
+       - **Professional Associates:** Co-stars, co-founders, bandmates, direct rivals, coach/student.
+       - **Historical Interactions:** Signed a treaty with, battled against, succeeded/preceded in office (direct succession).
     
-    2. **EXCLUDE (Very minimal - only obvious non-people):**
-       - Fictional characters or characters from TV/movies
-       - The subject themselves ("{subject_name}")
-       - Awards or events (unless it's a person's name)
+    2. **EXCLUDE (Invalid/Noise):**
+       - **NON-PEOPLE (CRITICAL):** Do NOT extract movies, albums, songs, bands, organizations, places, awards, or events.
+       - **Comparisons:** "He is often compared to [Person B]", "She writes like [Person C]".
+       - **Inspirations (Passive):** "He was inspired by [Person D]" (unless they actually met).
+       - **Lists/Awards:** "He is in the list of Time 100 alongside [Person E]" (unless they interacted).
+       - **Unrelated Politicians:** Do NOT include presidents or leaders just because they were in power at the time, unless there was a specific interaction.
+       - **Fictional Characters:** Do not extract characters.
+       - **The Subject Themselves:** Do not include "{subject_name}".
     
-    3. **CROSS-DOMAIN CONNECTIONS:**
-       - If the target is in politics/history and subject is in entertainment, PRIORITIZE political figures
-       - If you see any politician, president, or historical leader, INCLUDE THEM
-       - These cross-domain links are ESSENTIAL for bridging different fields
-    
-    4. **BRIDGE DETECTION:**
-       - Mark ANY politician, president, world leader, or historical figure as is_bridge=true
-       - These are the most valuable connections in the game
+    3. **BRIDGE DETECTION:**
+       - Mark as `is_bridge=true` ONLY if the person is a politician/leader AND they have a valid direct connection.
 
     ### OUTPUT FORMAT
-    Return ONLY valid JSON. err on the side of inclusion. When in doubt, INCLUDE the person.
+    Return ONLY valid JSON.
     {{
         "valid_candidates": [
             {{
                 "name": "Exact Name from List",
-                "type": "Brief reason (e.g., 'Mentioned in same context', 'Political figure')",
-                "is_bridge": true/false (True if politician, president, historical leader, diplomat)
+                "type": "Brief reason (e.g., 'Co-star', 'Spouse', 'Met at summit')",
+                "is_bridge": true/false
             }}
         ]
     }}
-    
-    REMEMBER: It's better to include too many than to miss a connection. The path-finding algorithm will handle the rest.
     """
     
     import re
