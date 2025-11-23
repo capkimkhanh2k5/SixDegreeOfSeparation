@@ -4,15 +4,13 @@ import google.generativeai as genai
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
-# Load environment variables
+# Load environment variables from .env file
 load_dotenv()
 
-# List of API Keys provided by the user for rotation
-API_KEYS = [
-    "AIzaSyD0bRtuhPEaOXm3oW_hKqETljfKyAT62LE",
-    "AIzaSyC-jwnhJJgeqdZJd9Hr4-kSK1zN2yNpgls",
-    "AIzaSyCfgnYy91rxM7T9ZMERExmhLfNWogjE94A"
-]
+# Load API Keys from environment variables (comma-separated)
+# Example in .env: GEMINI_API_KEYS=key1,key2,key3
+api_keys_string = os.getenv("GEMINI_API_KEYS", "")
+API_KEYS = [key.strip() for key in api_keys_string.split(",") if key.strip()]
 
 CURRENT_KEY_INDEX = 0
 
@@ -20,7 +18,7 @@ def configure_genai():
     """Configures Gemini with the current API key."""
     global CURRENT_KEY_INDEX
     if not API_KEYS:
-        print("ERROR: No API Keys provided.")
+        print("ERROR: No API Keys found. Please set GEMINI_API_KEYS in .env file.")
         return
     
     current_key = API_KEYS[CURRENT_KEY_INDEX]
