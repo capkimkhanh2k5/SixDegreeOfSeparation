@@ -37,123 +37,149 @@ def save_cache():
 # Load cache on module import
 load_cache()
 
-class BFS_Search:
+import asyncio
+import json
+import httpx
+from collections import deque
+from typing import List, Set, Dict, Optional, AsyncGenerator
+from .llm_client import verify_candidates_with_llm
+
+# Wikipedia API Endpoint
+API_URL = "https://en.wikipedia.org/w/api.php"
+
+# Persistent Cache Implementation
+import os
+import json
+import asyncio
+
+CACHE_FILE = "wiki_cache.json"
+_page_cache = {}
+
+def load_cache():
+    global _page_cache
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'r') as f:
+                _page_cache = json.load(f)
+            print(f"Loaded {len(_page_cache)} items from cache.")
+        except Exception as e:
+            print(f"Failed to load cache: {e}")
+
+def save_cache():
+    global _page_cache
+    try:
+        with open(CACHE_FILE, 'w') as f:
+            json.dump(_page_cache, f)
+    except Exception as e:
+        print(f"Failed to save cache: {e}")
+
+# Load cache on module import
+load_cache()
+
+class LevelBasedSearch:
     def __init__(self, start_page: str, end_page: str, client: httpx.AsyncClient):
         self.start_page = start_page
         self.end_page = end_page
         self.client = client
         
-        # Queues for Bi-directional Search
-        self.queue_start = deque([start_page])
-        self.queue_end = deque([end_page])
+        # Queue: (node, path_to_node, depth)
+        self.queue = deque([(start_page, [start_page], 0)])
         
-        # Visited Sets
-        self.visited_start = {start_page: None} # Node -> Parent
-        self.visited_end = {end_page: None}
+        # Visited: node -> depth
+        self.visited = {start_page: 0}
         
-        # State
-        self.found_path = None
+        # Config
+        self.MAX_DEGREE = 10  # Only keep top 10 connections per node
+        self.MAX_DEPTH = 10   # Stop at level 10
+        
         self.step_count = 0
 
     async def search(self) -> AsyncGenerator[str, None]:
         """
-        Executes the Bi-directional BFS loop.
+        Executes the Level-Based Search (Forward).
         Yields JSON status messages.
         """
-        yield json.dumps({"status": "info", "message": f"Initializing search: {self.start_page} <--> {self.end_page}"})
+        yield json.dumps({"status": "info", "message": f"Initializing Level-Based Search: {self.start_page} -> {self.end_page} (Max Depth: {self.MAX_DEPTH}, Max Degree: {self.MAX_DEGREE})"})
 
-        max_steps = 5000  # Increased from 1000 to allow much deeper searches
-        
-        while self.queue_start and self.queue_end and self.step_count < max_steps:
+        while self.queue:
             self.step_count += 1
+            current_node, path, depth = self.queue.popleft()
             
-            # Optimization: Expand the smaller queue
-            if len(self.queue_start) <= len(self.queue_end):
-                current_node = self.queue_start.popleft()
-                direction = "forward"
-                current_visited = self.visited_start
-                other_visited = self.visited_end
-            else:
-                current_node = self.queue_end.popleft()
-                direction = "backward"
-                current_visited = self.visited_end
-                other_visited = self.visited_start
+            if depth >= self.MAX_DEPTH:
+                # We reached max depth without finding the target in this branch
+                continue
+                
+            yield json.dumps({
+                "status": "visiting", 
+                "node": current_node, 
+                "direction": "forward", 
+                "step": self.step_count,
+                "depth": depth
+            })
             
-            yield json.dumps({"status": "visiting", "node": current_node, "direction": direction, "step": self.step_count})
+            print(f"DEBUG: Visiting {current_node} at depth {depth}")
+
+            # 1. Get Data
+            wiki_text, candidates = await self.get_page_data(current_node)
             
-            # 1. Get Data (Text + Links/Backlinks)
-            if direction == "forward":
-                wiki_text, candidates = await self.get_page_data(current_node)
-            else:
-                # For backward search, we need pages that link TO the current node
-                wiki_text, candidates = await self.get_backlinks_data(current_node)
-            
-            # Save cache periodically (every 50 steps)
-            if self.step_count % 50 == 0:
+            # Save cache periodically
+            if self.step_count % 20 == 0:
                 save_cache()
 
-            print(f"DEBUG: {current_node} ({direction}) - Raw Candidates: {len(candidates)}")
-            
-            # CRITICAL OPTIMIZATION: Early Exit
-            # If the target is directly in the candidates, we are done!
-            target_to_check = self.end_page if direction == "forward" else self.start_page
-            
-            if target_to_check in candidates:
-                print(f"DEBUG: Early Exit! Found {target_to_check} in {current_node}")
-                neighbor = target_to_check
-                if neighbor not in current_visited:
-                    current_visited[neighbor] = current_node
-                    # Ensure connection is recorded
-                    current_visited[neighbor] = current_node 
-                    path = self.reconstruct_path(neighbor, direction)
-                    save_cache()
-                    yield json.dumps({"status": "finished", "path": path})
-                    return
+            # 2. Check if target is in candidates (Early Exit)
+            if self.end_page in candidates:
+                print(f"DEBUG: Found target {self.end_page} in candidates of {current_node}")
+                final_path = path + [self.end_page]
+                save_cache()
+                yield json.dumps({"status": "finished", "path": final_path})
+                return
 
-            # 2. Heuristic Filter (Fast)
+            # 3. Heuristic Filter
             filtered_candidates = self.heuristic_filter(candidates)
-            print(f"DEBUG: {current_node} - Heuristic Filtered: {len(filtered_candidates)}")
             
-            # 3. LLM Verification (Smart Layer)
-            # Only verify if we have a reasonable number of candidates
-            valid_neighbors = []
+            # 4. LLM Verification & Ranking (Top 10)
+            # We need to find the top 10 most relevant people.
+            # We'll send a batch to LLM and ask it to return valid ones.
+            # Then we take the top 10.
             
-            if direction == "forward":
-                # Limit candidates to top 150 to avoid overwhelming LLM
-                candidates_for_llm = filtered_candidates[:150]
-                
-                # Verify with LLM
-                # Batching if necessary (handled in llm_client or here)
-                verified_objs = await verify_candidates_with_llm(wiki_text, current_node, target_name=self.end_page, candidates=candidates_for_llm)
-                print(f"DEBUG: {current_node} - LLM Verified: {len(verified_objs)}")
-                
-                # Sort by priority (is_bridge)
-                verified_objs.sort(key=lambda x: not x.get("is_bridge", False))
-                
-                valid_neighbors = [obj["name"] for obj in verified_objs]
-                
-                # Fallback: If LLM returns nothing, we respect that decision.
-                # This prevents adding noise when no real connections exist.
-                if not valid_neighbors:
-                    print(f"DEBUG: {current_node} - LLM returned 0. Strict filtering applied.")
-            else:
-                # Backward search: Just use links (LLM verification is harder backwards without context)
-                valid_neighbors = filtered_candidates
-
-            for neighbor in valid_neighbors:
-                if neighbor not in current_visited:
-                    current_visited[neighbor] = current_node
-                    self.queue_start.append(neighbor) if direction == "forward" else self.queue_end.append(neighbor)
+            # Limit input to LLM to avoid token limits (e.g., top 100 heuristic matches)
+            candidates_for_llm = filtered_candidates[:100]
+            
+            verified_objs = await verify_candidates_with_llm(
+                wiki_text, 
+                current_node, 
+                target_name=self.end_page, 
+                candidates=candidates_for_llm
+            )
+            
+            # Sort/Rank:
+            # Ideally LLM returns them in order or we have a confidence score.
+            # For now, we trust the LLM's order or the order they appeared (often relevance in Wiki).
+            # We can also prioritize those that are "bridges" (politicians/leaders) if we are looking for a path to a leader.
+            
+            # Prioritize 'is_bridge' if we are far from target? 
+            # Or just take the first 10 valid ones.
+            # User said: "find 10 people related to her".
+            
+            valid_neighbors = [obj["name"] for obj in verified_objs]
+            
+            # STRICT LIMIT: Top 10
+            top_neighbors = valid_neighbors[:self.MAX_DEGREE]
+            
+            print(f"DEBUG: {current_node} - Verified: {len(valid_neighbors)} -> Keeping Top {len(top_neighbors)}")
+            
+            for neighbor in top_neighbors:
+                if neighbor not in self.visited:
+                    self.visited[neighbor] = depth + 1
+                    new_path = path + [neighbor]
+                    self.queue.append((neighbor, new_path, depth + 1))
                     
-                    if neighbor in other_visited:
-                        # Intersection Found!
-                        current_visited[neighbor] = current_node # Ensure connection is recorded
-                        path = self.reconstruct_path(neighbor, direction)
-                        save_cache() # Save on finish
-                        yield json.dumps({"status": "finished", "path": path})
+                    if neighbor == self.end_page:
+                        save_cache()
+                        yield json.dumps({"status": "finished", "path": new_path})
                         return
 
-        yield json.dumps({"status": "error", "message": "No path found."})
+        yield json.dumps({"status": "error", "message": f"Route cannot be found within depth {self.MAX_DEPTH}."})
 
     async def get_page_data(self, title: str):
         # Check cache first
@@ -202,7 +228,7 @@ class BFS_Search:
             
             # Check for 'continue' to fetch more links
             while "continue" in link_data:
-                print(f"DEBUG: Pagination triggered for {title}...")
+                # print(f"DEBUG: Pagination triggered for {title}...")
                 continue_params = link_params.copy()
                 continue_params.update(link_data["continue"])
                 
@@ -213,9 +239,8 @@ class BFS_Search:
                     if "links" in page_data:
                         links.extend([link["title"] for link in page_data["links"]])
                 
-                # Safety break to prevent infinite loops on massive pages (e.g. "United States")
+                # Safety break
                 if len(links) > 3000:
-                    print(f"DEBUG: Reached link limit (3000) for {title}")
                     break
             
             # Store in cache
@@ -224,37 +249,6 @@ class BFS_Search:
             return result
         except Exception as e:
             print(f"ERROR in get_page_data for {title}: {e}")
-            return "", []
-
-    async def get_backlinks_data(self, title: str):
-        # Fetch Backlinks with Pagination
-        headers = {
-            "User-Agent": "SixDegreesOfWikipedia/1.0 (https://github.com/capkimkhanh2k5/SixDegreeOfSeparation; capkimkhanh2k5@gmail.com)"
-        }
-        params = {
-            "action": "query", "format": "json", "list": "backlinks",
-            "bltitle": title, "bllimit": "max", "blnamespace": 0
-        }
-        
-        links = []
-        try:
-            while True:
-                resp = await self.client.get(API_URL, params=params, headers=headers)
-                data = resp.json()
-                
-                batch = [item["title"] for item in data.get("query", {}).get("backlinks", [])]
-                links.extend(batch)
-                
-                if "continue" in data:
-                    params.update(data["continue"])
-                    if len(links) > 3000: # Safety limit
-                        break
-                else:
-                    break
-                    
-            return "", links # No text for backlinks usually
-        except Exception as e:
-            print(f"ERROR in get_backlinks_data for {title}: {e}")
             return "", []
 
     def heuristic_filter(self, candidates: List[str]) -> List[str]:
@@ -296,43 +290,11 @@ class BFS_Search:
             filtered.append(c)
         return filtered
 
-    def reconstruct_path(self, meeting_node: str, direction: str) -> List[str]:
-        # Reconstruct path from meeting node
-        
-        # Path from start to meeting_node
-        path_start = []
-        curr = meeting_node
-        if direction == "forward":
-            # If we found it going forward, meeting_node is in visited_start
-            # and its parent is in visited_start.
-            # The other side is visited_end, where meeting_node is also present (as key).
-            pass
-        
-        # Let's trace back from meeting_node in BOTH maps.
-        
-        # Trace back to start
-        curr = meeting_node
-        while curr:
-            path_start.append(curr)
-            curr = self.visited_start.get(curr)
-        path_start.reverse()
-        
-        # Trace back to end
-        path_end = []
-        curr = self.visited_end.get(meeting_node)
-        while curr:
-            path_end.append(curr)
-            curr = self.visited_end.get(curr)
-            
-        # path_start ends with meeting_node
-        # path_end starts with parent of meeting_node in visited_end
-        
-        return path_start + path_end
-
 # Wrapper for main.py
 async def find_shortest_path(start_page: str, end_page: str):
     limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
-    async with httpx.AsyncClient(limits=limits, timeout=180.0) as client:  # Increased from 60s to 180s
-        searcher = BFS_Search(start_page, end_page, client)
+    async with httpx.AsyncClient(limits=limits, timeout=180.0) as client:
+        # Use LevelBasedSearch instead of BFS_Search
+        searcher = LevelBasedSearch(start_page, end_page, client)
         async for msg in searcher.search():
             yield msg

@@ -128,7 +128,12 @@ async def verify_relations(wiki_text: str, subject_name: str, target_name: str, 
 
     ### TASK
     Analyze the "Candidate Links" and determine if they have a **factual, direct connection** to the "Current Subject".
-    You should use the provided "Context Text" as a primary source, but **YOU MAY USE YOUR INTERNAL KNOWLEDGE** to verify well-known public connections (e.g., partners, family, famous feuds) if they are missing from the text.
+    
+    **RANKING INSTRUCTION:**
+    You MUST rank the valid candidates based on how likely they are to lead to the "Target Person" ("{target_name}").
+    - If the target is a politician, prioritize other politicians or world leaders.
+    - If the target is a musician, prioritize other musicians or producers.
+    - If no specific connection is obvious, prioritize the most famous/influential people (hubs).
 
     ### FILTERING RULES (STRICT - DIRECT CONNECTIONS ONLY)
     1. **INCLUDE (Valid Connections):**
@@ -150,7 +155,7 @@ async def verify_relations(wiki_text: str, subject_name: str, target_name: str, 
        - Mark as `is_bridge=true` ONLY if the person is a politician/leader AND they have a valid direct connection.
 
     ### OUTPUT FORMAT
-    Return ONLY valid JSON.
+    Return ONLY valid JSON. The list `valid_candidates` MUST be sorted by relevance (most relevant first).
     {{
         "valid_candidates": [
             {{
