@@ -91,95 +91,109 @@ class LevelBasedSearch:
         # Config
         self.MAX_DEGREE = 10  # Only keep top 10 connections per node
         self.MAX_DEPTH = 10   # Stop at level 10
+        self.semaphore = asyncio.Semaphore(5) # Limit concurrent tasks to 5
         
         self.step_count = 0
 
     async def search(self) -> AsyncGenerator[str, None]:
         """
-        Executes the Level-Based Search (Forward).
+        Executes the Level-Based Search (Forward) with Parallel Level Processing.
         Yields JSON status messages.
         """
         yield json.dumps({"status": "info", "message": f"Initializing Level-Based Search: {self.start_page} -> {self.end_page} (Max Depth: {self.MAX_DEPTH}, Max Degree: {self.MAX_DEGREE})"})
 
         while self.queue:
             self.step_count += 1
-            current_node, path, depth = self.queue.popleft()
             
-            if depth >= self.MAX_DEPTH:
-                # We reached max depth without finding the target in this branch
-                continue
+            # 1. Collect all nodes at the current depth
+            current_depth = self.queue[0][2]
+            level_nodes = []
+            while self.queue and self.queue[0][2] == current_depth:
+                level_nodes.append(self.queue.popleft())
+            
+            if current_depth >= self.MAX_DEPTH:
+                break
                 
-            yield json.dumps({
-                "status": "visiting", 
-                "node": current_node, 
-                "direction": "forward", 
-                "step": self.step_count,
-                "depth": depth
-            })
+            print(f"DEBUG: Processing Level {current_depth} with {len(level_nodes)} nodes in parallel...")
             
-            print(f"DEBUG: Visiting {current_node} at depth {depth}")
-
-            # 1. Get Data
-            wiki_text, candidates = await self.get_page_data(current_node)
+            # 2. Process them in parallel
+            tasks = [self.process_node(node, path, depth) for node, path, depth in level_nodes]
+            results = await asyncio.gather(*tasks)
             
-            # Save cache periodically
-            if self.step_count % 20 == 0:
-                save_cache()
-
-            # 2. Check if target is in candidates (Early Exit)
-            if self.end_page in candidates:
-                print(f"DEBUG: Found target {self.end_page} in candidates of {current_node}")
-                final_path = path + [self.end_page]
-                save_cache()
-                yield json.dumps({"status": "finished", "path": final_path})
+            # 3. Handle results
+            found_target = False
+            for result in results:
+                if result:
+                    if result["found"]:
+                        yield json.dumps({"status": "finished", "path": result["path"]})
+                        found_target = True
+                        # We found a path! But we might want to finish the level or just return.
+                        # User asked for "a" path. Let's return.
+                        return
+                    
+                    # Add children to queue
+                    for child in result["children"]:
+                        self.queue.append(child)
+                        
+                    # Yield status for the visited node
+                    yield json.dumps({
+                        "status": "visiting", 
+                        "node": result["node"], 
+                        "direction": "forward", 
+                        "step": self.step_count, # This is level step now
+                        "depth": current_depth
+                    })
+            
+            if found_target:
                 return
 
-            # 3. Heuristic Filter
-            filtered_candidates = self.heuristic_filter(candidates)
-            
-            # 4. LLM Verification & Ranking (Top 10)
-            # We need to find the top 10 most relevant people.
-            # We'll send a batch to LLM and ask it to return valid ones.
-            # Then we take the top 10.
-            
-            # Limit input to LLM to avoid token limits (e.g., top 100 heuristic matches)
-            candidates_for_llm = filtered_candidates[:100]
-            
-            verified_objs = await verify_candidates_with_llm(
-                wiki_text, 
-                current_node, 
-                target_name=self.end_page, 
-                candidates=candidates_for_llm
-            )
-            
-            # Sort/Rank:
-            # Ideally LLM returns them in order or we have a confidence score.
-            # For now, we trust the LLM's order or the order they appeared (often relevance in Wiki).
-            # We can also prioritize those that are "bridges" (politicians/leaders) if we are looking for a path to a leader.
-            
-            # Prioritize 'is_bridge' if we are far from target? 
-            # Or just take the first 10 valid ones.
-            # User said: "find 10 people related to her".
-            
-            valid_neighbors = [obj["name"] for obj in verified_objs]
-            
-            # STRICT LIMIT: Top 10
-            top_neighbors = valid_neighbors[:self.MAX_DEGREE]
-            
-            print(f"DEBUG: {current_node} - Verified: {len(valid_neighbors)} -> Keeping Top {len(top_neighbors)}")
-            
-            for neighbor in top_neighbors:
-                if neighbor not in self.visited:
-                    self.visited[neighbor] = depth + 1
-                    new_path = path + [neighbor]
-                    self.queue.append((neighbor, new_path, depth + 1))
-                    
-                    if neighbor == self.end_page:
-                        save_cache()
-                        yield json.dumps({"status": "finished", "path": new_path})
-                        return
+            save_cache()
 
         yield json.dumps({"status": "error", "message": f"Route cannot be found within depth {self.MAX_DEPTH}."})
+
+    async def process_node(self, current_node, path, depth):
+        """
+        Process a single node: fetch, filter, verify, and return children.
+        """
+        async with self.semaphore:
+            try:
+                # 1. Get Data
+                wiki_text, candidates = await self.get_page_data(current_node)
+                
+                # 2. Check if target is in candidates (Early Exit)
+                if self.end_page in candidates:
+                    print(f"DEBUG: Found target {self.end_page} in candidates of {current_node}")
+                    return {"found": True, "path": path + [self.end_page], "node": current_node}
+
+                # 3. Heuristic Filter
+                filtered_candidates = self.heuristic_filter(candidates)
+                
+                # 4. LLM Verification & Ranking (Top 10)
+                candidates_for_llm = filtered_candidates[:100]
+                
+                verified_objs = await verify_candidates_with_llm(
+                    wiki_text, 
+                    current_node, 
+                    target_name=self.end_page, 
+                    candidates=candidates_for_llm
+                )
+                
+                valid_neighbors = [obj["name"] for obj in verified_objs]
+                top_neighbors = valid_neighbors[:self.MAX_DEGREE]
+                
+                print(f"DEBUG: {current_node} - Verified: {len(valid_neighbors)} -> Keeping Top {len(top_neighbors)}")
+                
+                children = []
+                for neighbor in top_neighbors:
+                    if neighbor not in self.visited:
+                        self.visited[neighbor] = depth + 1
+                        children.append((neighbor, path + [neighbor], depth + 1))
+                
+                return {"found": False, "children": children, "node": current_node}
+                
+            except Exception as e:
+                print(f"Error processing node {current_node}: {e}")
+                return None
 
     async def get_page_data(self, title: str):
         # Check cache first

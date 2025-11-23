@@ -1,17 +1,41 @@
 import os
 import json
 import google.generativeai as genai
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-# Configure API Key
-GENAI_API_KEY = os.environ.get("GEMINI_API_KEY")
-print(f"[LLM_CLIENT] GEMINI_API_KEY loaded: {bool(GENAI_API_KEY)}")
-if GENAI_API_KEY:
-    genai.configure(api_key=GENAI_API_KEY)
+# List of API Keys provided by the user for rotation
+API_KEYS = [
+    "AIzaSyD0bRtuhPEaOXm3oW_hKqETljfKyAT62LE",
+    "AIzaSyC-jwnhJJgeqdZJd9Hr4-kSK1zN2yNpgls",
+    "AIzaSyCfgnYy91rxM7T9ZMERExmhLfNWogjE94A"
+]
+
+CURRENT_KEY_INDEX = 0
+
+def configure_genai():
+    """Configures Gemini with the current API key."""
+    global CURRENT_KEY_INDEX
+    if not API_KEYS:
+        print("ERROR: No API Keys provided.")
+        return
+    
+    current_key = API_KEYS[CURRENT_KEY_INDEX]
+    genai.configure(api_key=current_key)
+    print(f"[LLM_CLIENT] Configured with API Key index {CURRENT_KEY_INDEX} (Ends with ...{current_key[-4:]})")
+
+def rotate_api_key():
+    """Switches to the next API key in the list."""
+    global CURRENT_KEY_INDEX
+    CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
+    configure_genai()
+    print(f"[LLM_CLIENT] ⚠️ Rate Limit Hit. Rotated to API Key index {CURRENT_KEY_INDEX}")
+
+# Initial Configuration
+configure_genai()
 
 def generate_extraction_prompt(wiki_text: str, subject_name: str) -> str:
     """
@@ -60,52 +84,69 @@ async def extract_relations(wiki_text: str, subject_name: str) -> List[str]:
     Extracts related people from the given text using Gemini.
     Returns a list of names.
     """
-    if not GENAI_API_KEY:
-        print("WARNING: GEMINI_API_KEY not found. Returning empty list.")
+    if not API_KEYS:
+        print("WARNING: No API Keys configured. Returning empty list.")
         return []
 
     prompt = generate_extraction_prompt(wiki_text, subject_name)
     
     import re
+    import time
     
-    try:
-        model = genai.GenerativeModel('gemini-flash-latest')
-        response = await model.generate_content_async(prompt)
-        
-        text_response = response.text
-        
-        # Use regex to find the first JSON object
-        match = re.search(r'\{.*\}', text_response, re.DOTALL)
-        if match:
-            json_str = match.group(0)
-            data = json.loads(json_str)
+    retries = 0
+    max_retries = 5
+    base_delay = 2
+    
+    while retries < max_retries:
+        try:
+            model = genai.GenerativeModel('gemini-flash-latest')
+            response = await model.generate_content_async(prompt)
             
-            connections = data.get("connections", [])
-            names = [item["name"] for item in connections]
-            return names
-        else:
-            # Fallback: try cleaning markdown as before if regex fails (unlikely if valid JSON exists)
-            if text_response.startswith("```json"):
-                text_response = text_response[7:]
-            if text_response.startswith("```"):
-                text_response = text_response[3:]
-            if text_response.endswith("```"):
-                text_response = text_response[:-3]
+            text_response = response.text
             
-            data = json.loads(text_response.strip())
-            connections = data.get("connections", [])
-            names = [item["name"] for item in connections]
-            return names
-    except Exception as e:
-        print(f"Error calling LLM for {subject_name}: {e}")
-        return []
+            # Use regex to find the first JSON object
+            match = re.search(r'\{.*\}', text_response, re.DOTALL)
+            if match:
+                json_str = match.group(0)
+                data = json.loads(json_str)
+                
+                connections = data.get("connections", [])
+                names = [item["name"] for item in connections]
+                return names
+            else:
+                # Fallback
+                if text_response.startswith("```json"):
+                    text_response = text_response[7:]
+                if text_response.startswith("```"):
+                    text_response = text_response[3:]
+                if text_response.endswith("```"):
+                    text_response = text_response[:-3]
+                
+                data = json.loads(text_response.strip())
+                connections = data.get("connections", [])
+                names = [item["name"] for item in connections]
+                return names
+                
+        except Exception as e:
+            if "429" in str(e) or "quota" in str(e).lower():
+                print(f"Rate limit hit for {subject_name}. Rotating key and retrying...")
+                rotate_api_key()
+                # Short delay to allow config to propagate/reset
+                await asyncio.sleep(1) 
+                retries += 1
+            else:
+                print(f"Error calling LLM for {subject_name}: {e}")
+                return []
+    
+    print(f"Max retries exceeded for {subject_name} (tried all keys).")
+    return []
             
 async def verify_relations(wiki_text: str, subject_name: str, target_name: str, candidates: List[str]) -> List[Dict[str, Any]]:
     """
     Verifies candidates using the 'Strict Verification Prompt'.
     Returns a list of dicts: [{'name': '...', 'type': '...', 'is_bridge': bool}]
     """
-    if not GENAI_API_KEY or not candidates:
+    if not API_KEYS or not candidates:
         return []
 
     # Limit batch size to avoid overload (User suggested 100, let's stick to it)
@@ -168,29 +209,44 @@ async def verify_relations(wiki_text: str, subject_name: str, target_name: str, 
     """
     
     import re
+    import asyncio
     
-    try:
-        model = genai.GenerativeModel('gemini-flash-latest')
-        response = await model.generate_content_async(system_prompt)
-        text_response = response.text
-        
-        match = re.search(r'\{.*\}', text_response, re.DOTALL)
-        if match:
-            json_str = match.group(0)
-            data = json.loads(json_str)
-            return data.get("valid_candidates", [])
-        else:
-            # Fallback cleanup
-            if text_response.startswith("```json"): text_response = text_response[7:]
-            if text_response.startswith("```"): text_response = text_response[3:]
-            if text_response.endswith("```"): text_response = text_response[:-3]
+    retries = 0
+    max_retries = 5
+    base_delay = 5  # Higher delay for verification as it's heavier
+    
+    while retries < max_retries:
+        try:
+            model = genai.GenerativeModel('gemini-flash-latest')
+            response = await model.generate_content_async(system_prompt)
+            text_response = response.text
             
-            data = json.loads(text_response.strip())
-            return data.get("valid_candidates", [])
-            
-    except Exception as e:
-        print(f"Error verifying relations for {subject_name}: {e}")
-        return []
+            match = re.search(r'\{.*\}', text_response, re.DOTALL)
+            if match:
+                json_str = match.group(0)
+                data = json.loads(json_str)
+                return data.get("valid_candidates", [])
+            else:
+                # Fallback cleanup
+                if text_response.startswith("```json"): text_response = text_response[7:]
+                if text_response.startswith("```"): text_response = text_response[3:]
+                if text_response.endswith("```"): text_response = text_response[:-3]
+                
+                data = json.loads(text_response.strip())
+                return data.get("valid_candidates", [])
+                
+        except Exception as e:
+            if "429" in str(e) or "quota" in str(e).lower():
+                print(f"Rate limit hit during verification for {subject_name}. Rotating key and retrying...")
+                rotate_api_key()
+                await asyncio.sleep(1)
+                retries += 1
+            else:
+                print(f"Error verifying relations for {subject_name}: {e}")
+                return []
+    
+    print(f"Max retries exceeded for {subject_name} verification (tried all keys).")
+    return []
 
 # Alias for the new BFS engine
 verify_candidates_with_llm = verify_relations
