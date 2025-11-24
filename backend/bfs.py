@@ -282,13 +282,51 @@ class LevelBasedSearch:
             "war", "battle", "treaty", "history", "politics", "election",
             "company", "organization", "party", "government", "agency",
             "location", "place", "city", "country", "architecture", "structure",
-            "series", "show", "single", "record", "family"
+            "series", "show", "single", "record", "family", "number",
+            "corporation", "inc", "ltd", "association", "institute", "foundation",
+            "version", "outbreak", "flood", "tornado", "hurricane", "earthquake",
+            "tsunami", "storm", "fire", "wildfire", "disaster", "incident",
+            "scandal", "controversy", "affair", "murder", "death", "killing",
+            "shooting", "bombing", "attack", "riot", "protest", "demonstration",
+            "ceremony", "parade", "festival", "celebration", "event",
+            "timeline", "statistics", "demographics", "economy", "geography",
+            "climate", "transport", "culture", "education", "health", "law",
+            "politics", "science", "technology", "sport", "religion", "mythology",
+            "soundtrack", "video", "dvd", "ep", "demo", "remix", "box set",
+            "compilation", "greatest hits", "live", "unplugged", "acoustic",
+            "instrumental", "karaoke", "cover", "tribute", "anthology",
+            "collection", "edition", "volume", "chapter", "part", "act",
+            "scene", "episode", "season", "series", "cycle", "saga", "trilogy",
+            "quadrilogy", "pentalogy", "hexalogy", "heptalogy", "octalogy",
+            "ennelogy", "decalogy", "franchise", "brand", "trademark", "logo",
+            "slogan", "motto", "symbol", "flag", "emblem", "coat of arms",
+            "anthem", "currency", "language", "dialect", "accent", "alphabet",
+            "script", "grammar", "vocabulary", "dictionary", "encyclopedia",
+            "manual", "guide", "handbook", "textbook", "novel", "book",
+            "poem", "play", "story", "tale", "legend", "myth", "fable",
+            "comic", "manga", "anime", "cartoon", "animation", "film",
+            "movie", "cinema", "theatre", "opera", "ballet", "dance",
+            "music", "song", "album", "single", "record", "track",
+            "chart", "billboard", "grammy", "oscar", "emmy", "tony",
+            "bafta", "golden globe", "award", "prize", "medal", "trophy",
+            "cup", "shield", "plate", "plaque", "certificate", "diploma",
+            "degree", "doctorate", "master", "bachelor", "phd", "md",
+            "jd", "mba", "mfa", "ma", "ms", "ba", "bs", "bed", "bfa",
+            "llb", "llm", "mdiv", "dd", "dmin", "thd", "std", "dphil",
+            "stabbing", "terrorism", "plot", "news", "clio", "press", "media",
+            "broadcasting", "entertainment", "production", "studios", "records"
         ]
         
         for c in candidates:
             # Skip years/dates that are just numbers
             if c.isdigit(): continue
             if len(c) <= 3 and c[0].isdigit(): continue
+            
+            # Skip titles starting with punctuation (likely songs/episodes like "Slut!", 'Til You Can't)
+            if c.startswith('"') or c.startswith("'") or c.startswith("...") or c.startswith("("): continue
+            
+            # Skip titles starting with a year (e.g., "2024 Southport stabbing")
+            if len(c) > 4 and c[:4].isdigit(): continue
             
             # Check against exclusion keywords (case-insensitive)
             c_lower = c.lower()
@@ -298,10 +336,9 @@ class LevelBasedSearch:
                     is_excluded = True
                     break
             
-            if is_excluded: continue
-            
-            # Keep everything else
-            filtered.append(c)
+            if not is_excluded:
+                filtered.append(c)
+                
         return filtered
 
 # Wrapper for main.py
