@@ -1,5 +1,8 @@
 import os
 import json
+import re
+import time
+import asyncio
 import google.generativeai as genai
 from typing import List, Dict, Any
 from dotenv import load_dotenv
@@ -53,10 +56,10 @@ def generate_extraction_prompt(wiki_text: str, subject_name: str) -> str:
        - Historical interactions (signed a treaty with, battled against, succeeded/preceded in office).
     
     2. **EXCLUDE (Invalid/Noise):**
-       - **NON-PEOPLE (CRITICAL):** Do NOT extract movies, albums, songs, bands, organizations, places, awards, or events.
-       - **Comparisons:** "He is often compared to [Person B]", "She writes like [Person C]".
+       - **Meta-pages (CRITICAL):** Do NOT extract "List of...", "Category:...", "Template:...", "User:...", "Talk:...".
+       - **Dates/Years:** Do not extract simple years (e.g., "2024") unless it's a specific event (e.g., "2024 Election").
+       - **Comparisons:** "He is often compared to [Person B]".
        - **Inspirations (Passive):** "He was inspired by [Person D]" (unless they actually met).
-       - **Name Dropping/Lists:** "He is in the list of Time 100 alongside [Person E]" (unless they interacted).
        - **Fictional Characters:** Do not extract characters played by the subject.
        - **The Subject Themselves:** Do not include "{subject_name}" in the output.
 
@@ -88,18 +91,18 @@ async def extract_relations(wiki_text: str, subject_name: str) -> List[str]:
 
     prompt = generate_extraction_prompt(wiki_text, subject_name)
     
-    import re
-    import time
-    
     retries = 0
     max_retries = 5
-    base_delay = 2
     
     while retries < max_retries:
         try:
             model = genai.GenerativeModel('gemini-flash-latest')
             response = await model.generate_content_async(prompt)
             
+            if not response.candidates or not response.candidates[0].content.parts:
+                print(f"LLM Warning: Empty response for extraction {subject_name}. Finish reason: {response.candidates[0].finish_reason if response.candidates else 'Unknown'}")
+                return []
+                
             text_response = response.text
             
             # Use regex to find the first JSON object
@@ -182,13 +185,12 @@ async def verify_relations(wiki_text: str, subject_name: str, target_name: str, 
        - **Historical Interactions:** Signed a treaty with, battled against, succeeded/preceded in office (direct succession).
     
     2. **EXCLUDE (Invalid/Noise):**
-       - **NON-PEOPLE (CRITICAL):** Do NOT extract movies, albums, songs, bands, organizations, places, awards, or events.
-       - **Comparisons:** "He is often compared to [Person B]", "She writes like [Person C]".
+       - **Meta-pages (CRITICAL):** Do NOT extract "List of...", "Category:...", "Template:...", "User:...", "Talk:...".
+       - **Dates/Years:** Do not extract simple years (e.g., "2024") unless it's a specific event (e.g., "2024 Election").
+       - **Comparisons:** "He is often compared to [Person B]".
        - **Inspirations (Passive):** "He was inspired by [Person D]" (unless they actually met).
-       - **Lists/Awards:** "He is in the list of Time 100 alongside [Person E]" (unless they interacted).
-       - **Unrelated Politicians:** Do NOT include presidents or leaders just because they were in power at the time, unless there was a specific interaction.
-       - **Fictional Characters:** Do not extract characters.
-       - **The Subject Themselves:** Do not include "{subject_name}".
+       - **Fictional Characters:** Do not extract characters played by the subject.
+       - **The Subject Themselves:** Do not include "{subject_name}" in the output.
     
     3. **BRIDGE DETECTION:**
        - Mark as `is_bridge=true` ONLY if the person is a politician/leader AND they have a valid direct connection.
@@ -206,17 +208,18 @@ async def verify_relations(wiki_text: str, subject_name: str, target_name: str, 
     }}
     """
     
-    import re
-    import asyncio
-    
     retries = 0
     max_retries = 5
-    base_delay = 5  # Higher delay for verification as it's heavier
     
     while retries < max_retries:
         try:
             model = genai.GenerativeModel('gemini-flash-latest')
             response = await model.generate_content_async(system_prompt)
+            
+            if not response.candidates or not response.candidates[0].content.parts:
+                print(f"LLM Warning: Empty response for {subject_name}. Finish reason: {response.candidates[0].finish_reason if response.candidates else 'Unknown'}")
+                return []
+                
             text_response = response.text
             
             match = re.search(r'\{.*\}', text_response, re.DOTALL)
@@ -248,4 +251,3 @@ async def verify_relations(wiki_text: str, subject_name: str, target_name: str, 
 
 # Alias for the new BFS engine
 verify_candidates_with_llm = verify_relations
-

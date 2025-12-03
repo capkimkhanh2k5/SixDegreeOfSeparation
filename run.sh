@@ -16,7 +16,8 @@ npm run build
 cd ..
 
 echo "Starting Unified Server on Port 8000..."
-source venv/bin/activate
+source .venv/bin/activate
+pip install -r requirements.txt
 uvicorn backend.main:app --reload --port 8000
 
 # Wait is not needed as uvicorn runs in foreground now (or we can background it if preferred, but foreground is better for logs)

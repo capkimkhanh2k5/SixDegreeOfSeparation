@@ -2,17 +2,14 @@ import asyncio
 import json
 import httpx
 from collections import deque
-from typing import List, Set, Dict, Optional, AsyncGenerator
+from typing import List, Set, Dict, Optional, AsyncGenerator, Tuple
 from .llm_client import verify_candidates_with_llm
+import os
 
 # Wikipedia API Endpoint
 API_URL = "https://en.wikipedia.org/w/api.php"
 
 # Persistent Cache Implementation
-import os
-import json
-import asyncio
-
 CACHE_FILE = "wiki_cache.json"
 _page_cache = {}
 
@@ -37,299 +34,284 @@ def save_cache():
 # Load cache on module import
 load_cache()
 
-import asyncio
-import json
-import httpx
-from collections import deque
-from typing import List, Set, Dict, Optional, AsyncGenerator
-from .llm_client import verify_candidates_with_llm
-
-# Wikipedia API Endpoint
-API_URL = "https://en.wikipedia.org/w/api.php"
-
-# Persistent Cache Implementation
-import os
-import json
-import asyncio
-
-CACHE_FILE = "wiki_cache.json"
-_page_cache = {}
-
-def load_cache():
-    global _page_cache
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, 'r') as f:
-                _page_cache = json.load(f)
-            print(f"Loaded {len(_page_cache)} items from cache.")
-        except Exception as e:
-            print(f"Failed to load cache: {e}")
-
-def save_cache():
-    global _page_cache
-    try:
-        with open(CACHE_FILE, 'w') as f:
-            json.dump(_page_cache, f)
-    except Exception as e:
-        print(f"Failed to save cache: {e}")
-
-# Load cache on module import
-load_cache()
-
-class LevelBasedSearch:
+class BidirectionalLevelBasedSearch:
     def __init__(self, start_page: str, end_page: str, client: httpx.AsyncClient):
         self.start_page = start_page
         self.end_page = end_page
         self.client = client
         
-        # Queue: (node, path_to_node, depth)
-        self.queue = deque([(start_page, [start_page], 0)])
+        # Queues: (node, path_list)
+        # Forward: Path from Start -> Node
+        self.queue_f = deque([(start_page, [start_page])])
+        # Backward: Path from End -> Node (reversed direction)
+        self.queue_b = deque([(end_page, [end_page])])
         
-        # Visited: node -> depth
-        self.visited = {start_page: 0}
+        # Visited: node -> path_list
+        self.visited_f = {start_page: [start_page]}
+        self.visited_b = {end_page: [end_page]}
         
         # Config
-        self.MAX_DEGREE = 10  # Only keep top 10 connections per node
-        self.MAX_DEPTH = 10   # Stop at level 10
-        self.semaphore = asyncio.Semaphore(5) # Limit concurrent tasks to 5
+        self.MAX_DEGREE = 15  # Slightly increased for better coverage
+        self.MAX_DEPTH = 10   # Total path length limit
+        self.semaphore = asyncio.Semaphore(10) # Increased concurrency
         
         self.step_count = 0
 
     async def search(self) -> AsyncGenerator[str, None]:
         """
-        Executes the Level-Based Search (Forward) with Parallel Level Processing.
+        Executes Bidirectional BFS.
         Yields JSON status messages.
         """
-        yield json.dumps({"status": "info", "message": f"Initializing Level-Based Search: {self.start_page} -> {self.end_page} (Max Depth: {self.MAX_DEPTH}, Max Degree: {self.MAX_DEGREE})"})
+        yield json.dumps({"status": "info", "message": f"Initializing Bidirectional Search: {self.start_page} <-> {self.end_page}"})
 
-        while self.queue:
+        while self.queue_f and self.queue_b:
             self.step_count += 1
             
-            # 1. Collect all nodes at the current depth
-            current_depth = self.queue[0][2]
-            level_nodes = []
-            while self.queue and self.queue[0][2] == current_depth:
-                level_nodes.append(self.queue.popleft())
-            
-            if current_depth >= self.MAX_DEPTH:
-                break
-                
-            print(f"DEBUG: Processing Level {current_depth} with {len(level_nodes)} nodes in parallel...")
-            
-            # 2. Process them in parallel
-            tasks = [self.process_node(node, path, depth) for node, path, depth in level_nodes]
-            results = await asyncio.gather(*tasks)
-            
-            # 3. Handle results
-            found_target = False
-            for result in results:
-                if result:
-                    if result["found"]:
-                        yield json.dumps({"status": "finished", "path": result["path"]})
-                        found_target = True
-                        # We found a path! But we might want to finish the level or just return.
-                        # User asked for "a" path. Let's return.
-                        return
-                    
-                    # Add children to queue
-                    for child in result["children"]:
-                        self.queue.append(child)
-                        
-                    # Yield status for the visited node
-                    yield json.dumps({
-                        "status": "visiting", 
-                        "node": result["node"], 
-                        "direction": "forward", 
-                        "step": self.step_count, # This is level step now
-                        "depth": current_depth
-                    })
-            
-            if found_target:
+            # Check if we exceeded depth (heuristic: sum of depths)
+            # Since we don't store depth explicitly in queue for simplicity, we can check path length
+            if len(self.queue_f[0][1]) + len(self.queue_b[0][1]) > self.MAX_DEPTH:
+                yield json.dumps({"status": "error", "message": "Max depth exceeded."})
                 return
 
+            # Expand the smaller frontier
+            if len(self.queue_f) <= len(self.queue_b):
+                direction = "forward"
+                queue = self.queue_f
+                visited_own = self.visited_f
+                visited_other = self.visited_b
+            else:
+                direction = "backward"
+                queue = self.queue_b
+                visited_own = self.visited_b
+                visited_other = self.visited_f
+
+            # Process one level
+            # We pop all nodes at the current level to process them in parallel
+            # But for simplicity and responsiveness, let's process a batch
+            batch_size = 5
+            level_nodes = []
+            for _ in range(min(len(queue), batch_size)):
+                level_nodes.append(queue.popleft())
+            
+            print(f"DEBUG: Processing {len(level_nodes)} nodes in {direction} direction...")
+            
+            tasks = [self.process_node(node, path, direction) for node, path in level_nodes]
+            results = await asyncio.gather(*tasks)
+            
+            for result in results:
+                if not result:
+                    continue
+                
+                parent_node = result["node"]
+                children = result["children"]
+                
+                yield json.dumps({
+                    "status": "visiting",
+                    "node": parent_node,
+                    "direction": direction,
+                    "step": self.step_count,
+                    "found_count": len(children)
+                })
+
+                for child in children:
+                    if child in visited_own:
+                        continue
+                    
+                    new_path = result["path"] + [child]
+                    visited_own[child] = new_path
+                    queue.append((child, new_path))
+                    
+                    # Check for intersection
+                    if child in visited_other:
+                        path_f = self.visited_f[child] if direction == "forward" else self.visited_f[child]
+                        path_b = self.visited_b[child] if direction == "backward" else self.visited_b[child]
+                        
+                        # Construct full path: Start -> ... -> Meeting -> ... -> End
+                        # path_b is End -> ... -> Meeting. We need to reverse it.
+                        # But wait, path_b is stored as [End, ..., Meeting]
+                        # So we reverse path_b[:-1] and append?
+                        # No, path_b is [End, Y, X, Meeting].
+                        # We want Meeting -> X -> Y -> End.
+                        # So we take path_b reversed.
+                        # But path_b includes Meeting. path_f includes Meeting.
+                        # path_f: [Start, A, Meeting]
+                        # path_b: [End, B, Meeting]
+                        # Full: [Start, A, Meeting, B, End]
+                        
+                        full_path_list = path_f[:-1] + path_b[::-1]
+                        
+                        yield json.dumps({"status": "finished", "path": full_path_list})
+                        return
+            
             save_cache()
+            
+        yield json.dumps({"status": "error", "message": "No path found."})
 
-        yield json.dumps({"status": "error", "message": f"Route cannot be found within depth {self.MAX_DEPTH}."})
-
-    async def process_node(self, current_node, path, depth):
-        """
-        Process a single node: fetch, filter, verify, and return children.
-        """
+    async def process_node(self, current_node: str, path: List[str], direction: str):
         async with self.semaphore:
             try:
-                # 1. Get Data
-                wiki_text, candidates = await self.get_page_data(current_node)
-                
-                # 2. Check if target is in candidates (Early Exit)
-                if self.end_page in candidates:
-                    print(f"DEBUG: Found target {self.end_page} in candidates of {current_node}")
-                    return {"found": True, "path": path + [self.end_page], "node": current_node}
+                # 1. Fetch Candidates
+                if direction == "forward":
+                    # Get outgoing links
+                    wiki_text, candidates = await self.get_page_data(current_node)
+                    target_for_llm = self.end_page
+                else:
+                    # Get incoming links (backlinks)
+                    # For backward search, we don't have the "source" text easily.
+                    # We just get a list of pages that link TO current_node.
+                    candidates = await self.get_backlinks(current_node)
+                    wiki_text = "" # No context for backlinks yet
+                    target_for_llm = self.start_page
 
-                # 3. Heuristic Filter
+                # 2. Heuristic Filter
                 filtered_candidates = self.heuristic_filter(candidates)
                 
-                # 4. LLM Verification & Ranking (Top 10)
-                candidates_for_llm = filtered_candidates[:100]
+                # 3. Verification
+                # For backward search, LLM verification is tricky without text.
+                # We will skip LLM for backward search OR use a very lightweight check if needed.
+                # For now, let's skip LLM for backward to be fast, but rely on strict Heuristics.
+                # OR: We can just take the top N candidates.
                 
-                verified_objs = await verify_candidates_with_llm(
-                    wiki_text, 
-                    current_node, 
-                    target_name=self.end_page, 
-                    candidates=candidates_for_llm
-                )
+                final_candidates = []
                 
-                valid_neighbors = [obj["name"] for obj in verified_objs]
-                top_neighbors = valid_neighbors[:self.MAX_DEGREE]
+                if direction == "forward":
+                    # Use LLM to verify and rank
+                    candidates_for_llm = filtered_candidates[:60] # Limit input
+                    verified_objs = await verify_candidates_with_llm(
+                        wiki_text, 
+                        current_node, 
+                        target_name=target_for_llm, 
+                        candidates=candidates_for_llm
+                    )
+                    final_candidates = [obj["name"] for obj in verified_objs]
+                    
+                    # Fallback if LLM returns nothing but we had candidates
+                    if not final_candidates and candidates_for_llm:
+                        print(f"DEBUG: {current_node} - LLM returned 0, falling back to top 10 heuristic candidates.")
+                        final_candidates = candidates_for_llm[:10]
+                else:
+                    # Backward: Just take top filtered candidates (maybe random or just first few?)
+                    # Backlinks are usually sorted by something? No.
+                    # We'll take top 20 to avoid explosion.
+                    final_candidates = filtered_candidates[:20]
                 
-                print(f"DEBUG: {current_node} - Verified: {len(valid_neighbors)} -> Keeping Top {len(top_neighbors)}")
+                # Keep top N
+                top_candidates = final_candidates[:self.MAX_DEGREE]
                 
-                children = []
-                for neighbor in top_neighbors:
-                    if neighbor not in self.visited:
-                        self.visited[neighbor] = depth + 1
-                        children.append((neighbor, path + [neighbor], depth + 1))
-                
-                return {"found": False, "children": children, "node": current_node}
-                
+                return {"node": current_node, "children": top_candidates, "path": path}
+
             except Exception as e:
-                print(f"Error processing node {current_node}: {e}")
+                print(f"Error processing node {current_node} ({direction}): {e}")
                 return None
 
-    async def get_page_data(self, title: str):
-        # Check cache first
-        global _page_cache
+    async def get_page_data(self, title: str) -> Tuple[str, List[str]]:
+        # Check cache
         if title in _page_cache:
-            print(f"CACHE HIT: {title}")
             return _page_cache[title]
         
-        # Fetch Intro + Links
         headers = {
-            "User-Agent": "SixDegreesOfWikipedia/1.0 (https://github.com/capkimkhanh2k5/SixDegreeOfSeparation; capkimkhanh2k5@gmail.com)"
+            "User-Agent": "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"
         }
         
         try:
-            # Parallelize requests using asyncio.gather
-            # 1. Text Request
-            text_req = self.client.get(API_URL, params={
+            # Fetch Text and Links
+            params_text = {
                 "action": "query", "format": "json", "titles": title, 
                 "prop": "extracts", "explaintext": 1, "exintro": 1
-            }, headers=headers)
-            
-            # 2. Links Request (Initial)
-            link_params = {
-                "action": "query", "format": "json", "titles": title,
-                "prop": "links", "plnamespace": 0, "pllimit": "max" # Request max allowed (500 for users)
             }
-            link_req = self.client.get(API_URL, params=link_params, headers=headers)
+            params_links = {
+                "action": "query", "format": "json", "titles": title,
+                "prop": "links", "plnamespace": 0, "pllimit": "max"
+            }
             
-            # Execute initial requests concurrently
-            text_resp, link_resp = await asyncio.gather(text_req, link_req)
+            req_text = self.client.get(API_URL, params=params_text, headers=headers)
+            req_links = self.client.get(API_URL, params=params_links, headers=headers)
             
-            # Process Text
-            text_data = text_resp.json()
-            pages = text_data.get("query", {}).get("pages", {})
+            resp_text, resp_links = await asyncio.gather(req_text, req_links)
+            
+            # Parse Text
+            data_text = resp_text.json()
+            pages = data_text.get("query", {}).get("pages", {})
             text = ""
             for _, p in pages.items(): text = p.get("extract", "")
             
-            # Process Links (with Pagination)
-            link_data = link_resp.json()
+            # Parse Links
+            data_links = resp_links.json()
             links = []
-            
-            # Extract first batch
-            for page_id, page_data in link_data.get("query", {}).get("pages", {}).items():
-                if "links" in page_data:
-                    links.extend([link["title"] for link in page_data["links"]])
-            
-            # Check for 'continue' to fetch more links
-            while "continue" in link_data:
-                # print(f"DEBUG: Pagination triggered for {title}...")
-                continue_params = link_params.copy()
-                continue_params.update(link_data["continue"])
+            while True:
+                for _, p in data_links.get("query", {}).get("pages", {}).items():
+                    if "links" in p:
+                        links.extend([l["title"] for l in p["links"]])
                 
-                link_resp = await self.client.get(API_URL, params=continue_params, headers=headers)
-                link_data = link_resp.json()
-                
-                for page_id, page_data in link_data.get("query", {}).get("pages", {}).items():
-                    if "links" in page_data:
-                        links.extend([link["title"] for link in page_data["links"]])
-                
-                # Safety break
-                if len(links) > 3000:
+                if "continue" in data_links:
+                    cont = data_links["continue"]
+                    params_links.update(cont)
+                    resp_links = await self.client.get(API_URL, params=params_links, headers=headers)
+                    data_links = resp_links.json()
+                    if len(links) > 2000: break # Safety limit
+                else:
                     break
             
-            # Store in cache
             result = (text, links)
             _page_cache[title] = result
             return result
         except Exception as e:
-            print(f"ERROR in get_page_data for {title}: {e}")
+            print(f"API Error (Forward) {title}: {e}")
             return "", []
 
-    def heuristic_filter(self, candidates: List[str]) -> List[str]:
-        # Filter out obvious non-people
-        filtered = []
+    async def get_backlinks(self, title: str) -> List[str]:
+        # We can cache backlinks too if we want, but let's keep it simple for now or use same cache?
+        # Backlinks are different from forward links. Let's not mix in _page_cache unless we use a key prefix.
+        # For now, no cache for backlinks to save memory/complexity.
         
-        # Keywords that strongly suggest non-people (lowercase for easier matching)
+        headers = {
+            "User-Agent": "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"
+        }
+        
+        try:
+            params = {
+                "action": "query", "format": "json", 
+                "list": "backlinks", "bltitle": title, 
+                "blnamespace": 0, "bllimit": "max"
+            }
+            
+            resp = await self.client.get(API_URL, params=params, headers=headers)
+            data = resp.json()
+            
+            backlinks = []
+            while True:
+                if "backlinks" in data.get("query", {}):
+                    backlinks.extend([b["title"] for b in data["query"]["backlinks"]])
+                
+                if "continue" in data:
+                    cont = data["continue"]
+                    params.update(cont)
+                    resp = await self.client.get(API_URL, params=params, headers=headers)
+                    data = resp.json()
+                    if len(backlinks) > 2000: break
+                else:
+                    break
+            
+            return backlinks
+        except Exception as e:
+            print(f"API Error (Backward) {title}: {e}")
+            return []
+
+    def heuristic_filter(self, candidates: List[str]) -> List[str]:
+        filtered = []
+        # Keywords to exclude (Wikipedia meta-pages and generic lists)
         exclude_keywords = [
-            "list of", "award", "film", "movie", "album", "song", "band", "group",
-            "discography", "videography", "bibliography", "tour", "concert",
-            "season", "episode", "game", "championship", "tournament", "cup",
-            "university", "college", "school", "hospital", "station", "airport",
-            "park", "bridge", "building", "street", "avenue", "road", "highway",
-            "river", "lake", "mountain", "ocean", "sea", "island", "bay",
-            "template:", "category:", "portal:", "help:", "wikipedia:", "file:",
-            "(city)", "(place)", "republic", "kingdom", "empire", "state", "province",
-            "war", "battle", "treaty", "history", "politics", "election",
-            "company", "organization", "party", "government", "agency",
-            "location", "place", "city", "country", "architecture", "structure",
-            "series", "show", "single", "record", "family", "number",
-            "corporation", "inc", "ltd", "association", "institute", "foundation",
-            "version", "outbreak", "flood", "tornado", "hurricane", "earthquake",
-            "tsunami", "storm", "fire", "wildfire", "disaster", "incident",
-            "scandal", "controversy", "affair", "murder", "death", "killing",
-            "shooting", "bombing", "attack", "riot", "protest", "demonstration",
-            "ceremony", "parade", "festival", "celebration", "event",
-            "timeline", "statistics", "demographics", "economy", "geography",
-            "climate", "transport", "culture", "education", "health", "law",
-            "politics", "science", "technology", "sport", "religion", "mythology",
-            "soundtrack", "video", "dvd", "ep", "demo", "remix", "box set",
-            "compilation", "greatest hits", "live", "unplugged", "acoustic",
-            "instrumental", "karaoke", "cover", "tribute", "anthology",
-            "collection", "edition", "volume", "chapter", "part", "act",
-            "scene", "episode", "season", "series", "cycle", "saga", "trilogy",
-            "quadrilogy", "pentalogy", "hexalogy", "heptalogy", "octalogy",
-            "ennelogy", "decalogy", "franchise", "brand", "trademark", "logo",
-            "slogan", "motto", "symbol", "flag", "emblem", "coat of arms",
-            "anthem", "currency", "language", "dialect", "accent", "alphabet",
-            "script", "grammar", "vocabulary", "dictionary", "encyclopedia",
-            "manual", "guide", "handbook", "textbook", "novel", "book",
-            "poem", "play", "story", "tale", "legend", "myth", "fable",
-            "comic", "manga", "anime", "cartoon", "animation", "film",
-            "movie", "cinema", "theatre", "opera", "ballet", "dance",
-            "music", "song", "album", "single", "record", "track",
-            "chart", "billboard", "grammy", "oscar", "emmy", "tony",
-            "bafta", "golden globe", "award", "prize", "medal", "trophy",
-            "cup", "shield", "plate", "plaque", "certificate", "diploma",
-            "degree", "doctorate", "master", "bachelor", "phd", "md",
-            "jd", "mba", "mfa", "ma", "ms", "ba", "bs", "bed", "bfa",
-            "llb", "llm", "mdiv", "dd", "dmin", "thd", "std", "dphil",
-            "stabbing", "terrorism", "plot", "news", "clio", "press", "media",
-            "broadcasting", "entertainment", "production", "studios", "records"
+            "list of", "category:", "template:", "portal:", "help:", "wikipedia:", "file:",
+            "user:", "talk:", "special:", "mediawiki:", "draft:", "timedtext:", "module:",
+            "disambiguation"
         ]
         
         for c in candidates:
-            # Skip years/dates that are just numbers
-            if c.isdigit(): continue
-            if len(c) <= 3 and c[0].isdigit(): continue
-            
-            # Skip titles starting with punctuation (likely songs/episodes like "Slut!", 'Til You Can't)
-            if c.startswith('"') or c.startswith("'") or c.startswith("...") or c.startswith("("): continue
-            
-            # Skip titles starting with a year (e.g., "2024 Southport stabbing")
-            if len(c) > 4 and c[:4].isdigit(): continue
-            
-            # Check against exclusion keywords (case-insensitive)
             c_lower = c.lower()
+            # Basic filters
+            if c[0].isdigit(): continue # Years/Dates
+            if c.startswith("List of"): continue
+            
             is_excluded = False
             for k in exclude_keywords:
                 if k in c_lower:
@@ -343,9 +325,8 @@ class LevelBasedSearch:
 
 # Wrapper for main.py
 async def find_shortest_path(start_page: str, end_page: str):
-    limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
-    async with httpx.AsyncClient(limits=limits, timeout=180.0) as client:
-        # Use LevelBasedSearch instead of BFS_Search
-        searcher = LevelBasedSearch(start_page, end_page, client)
+    limits = httpx.Limits(max_keepalive_connections=20, max_connections=40)
+    async with httpx.AsyncClient(limits=limits, timeout=30.0) as client:
+        searcher = BidirectionalLevelBasedSearch(start_page, end_page, client)
         async for msg in searcher.search():
             yield msg

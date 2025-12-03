@@ -5,10 +5,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import httpx
+import json
+import os
+import re
+from dotenv import load_dotenv
+
 from .bfs import find_shortest_path
 from .text_utils import smart_name_search, resolve_wikipedia_name
-from dotenv import load_dotenv
-import os
 
 load_dotenv()
 
@@ -17,7 +20,7 @@ app = FastAPI()
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8000", "http://localhost:5173"], # Updated to include frontend port
+    allow_origins=["http://localhost:8000", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -54,7 +57,7 @@ async def get_page_details(titles: List[str]) -> List[PageDetail]:
     }
     
     headers = {
-        "User-Agent": "SixDegreesOfWikipedia/1.0 (https://github.com/capkimkhanh2k5/SixDegreeOfSeparation; capkimkhanh2k5@gmail.com)"
+        "User-Agent": "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"
     }
     
     details_map = {}
@@ -75,12 +78,6 @@ async def get_page_details(titles: List[str]) -> List[PageDetail]:
     # Return details in the original order of titles
     return [details_map.get(title, PageDetail(title=title, url=f"https://en.wikipedia.org/wiki/{title}")) for title in titles]
 
-from fastapi.responses import StreamingResponse
-import json
-
-# ... (imports)
-
-
 @app.get("/api/search")
 async def search_wikipedia(q: str = Query(..., min_length=1)):
     """
@@ -88,7 +85,7 @@ async def search_wikipedia(q: str = Query(..., min_length=1)):
     Handles names with/without diacritics, typos, and multiple languages.
     """
     headers = {
-        "User-Agent": "SixDegreesOfWikipedia/1.0 (https://github.com/capkimkhanh2k5/SixDegreeOfSeparation; capkimkhanh2k5@gmail.com)"
+        "User-Agent": "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"
     }
     
     async with httpx.AsyncClient(headers=headers) as client:
@@ -137,7 +134,6 @@ async def search_wikipedia(q: str = Query(..., min_length=1)):
                 "disambiguation", "list of", "school", "university", "college"
             ]
             
-            import re
             filtered_titles = []
             
             for _, page in pages.items():
@@ -181,11 +177,9 @@ async def resolve_name_endpoint(q: str = Query(..., min_length=1)):
     """
     Resolves a name to its correct Wikipedia title.
     Handles diacritics, typos, and alternate spellings.
-    
-    Example: "nguyen van thieu" -> "Nguyễn Văn Thiệu"
     """
     headers = {
-        "User-Agent": "SixDegreesOfWikipedia/1.0"
+        "User-Agent": "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"
     }
     
     async with httpx.AsyncClient(headers=headers) as client:
@@ -201,28 +195,20 @@ async def resolve_name_endpoint(q: str = Query(..., min_length=1)):
             print(f"Error resolving name: {e}")
             raise HTTPException(status_code=500, detail="Failed to resolve name")
 
-            
-        except Exception as e:
-            print(f"Error searching Wikipedia: {e}")
-            raise HTTPException(status_code=500, detail="Failed to fetch suggestions")
-
 @app.post("/api/shortest-path")
 async def get_shortest_path(request: PathRequest):
-    # Auto-resolve names to handle diacritics, typos, etc.
+    # Auto-resolve names
     headers = {
-        "User-Agent": "SixDegreesOfWikipedia/1.0"
+        "User-Agent": "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"
     }
     
     async with httpx.AsyncClient(headers=headers, timeout=10.0) as resolve_client:
-        # Resolve both start and end names
         resolved_start = await resolve_wikipedia_name(request.start_page, resolve_client)
         resolved_end = await resolve_wikipedia_name(request.end_page, resolve_client)
         
-        # Use resolved names or fall back to original
         start_page = resolved_start if resolved_start else request.start_page
         end_page = resolved_end if resolved_end else request.end_page
         
-        # Log resolution for debugging
         if resolved_start != request.start_page:
             print(f"RESOLVED: '{request.start_page}' → '{resolved_start}'")
         if resolved_end != request.end_page:
@@ -246,17 +232,12 @@ async def get_shortest_path(request: PathRequest):
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
-
-
-
-# Get the directory of the current file
+# Static Files
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Go up one level to root
 ROOT_DIR = os.path.dirname(BASE_DIR)
 DIST_DIR = os.path.join(ROOT_DIR, "frontend", "dist")
 ASSETS_DIR = os.path.join(DIST_DIR, "assets")
 
-# Mount the assets directory
 if os.path.exists(ASSETS_DIR):
     app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 else:
@@ -264,22 +245,15 @@ else:
 
 @app.get("/{full_path:path}")
 async def serve_react_app(full_path: str):
-    """
-    Serve the React app for any other path (client-side routing).
-    """
-    # Don't catch API routes (though FastAPI prioritizes specific routes anyway)
     if full_path.startswith("api"):
          raise HTTPException(status_code=404, detail="Not Found")
     
-    # Check if it's a file in the dist folder (like vite.svg)
     file_path = os.path.join(DIST_DIR, full_path)
     if os.path.exists(file_path) and os.path.isfile(file_path):
         return FileResponse(file_path)
         
-    # Otherwise return index.html
     index_path = os.path.join(DIST_DIR, "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
     else:
         return HTTPException(status_code=404, detail="Frontend not built. Run 'npm run build' in frontend directory.")
-
