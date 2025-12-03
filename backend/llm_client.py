@@ -251,3 +251,44 @@ async def verify_relations(wiki_text: str, subject_name: str, target_name: str, 
 
 # Alias for the new BFS engine
 verify_candidates_with_llm = verify_relations
+
+async def generate_relationship_context(person1: str, person2: str) -> str:
+    """
+    Generates a brief description of the relationship between two people.
+    """
+    if not API_KEYS:
+        return "Connected"
+
+    system_prompt = f"""
+    ### TASK
+    Explain the specific, factual connection between "{person1}" and "{person2}" in one short sentence.
+    
+    ### EXAMPLES
+    - "Co-starred in the movie 'Pulp Fiction'."
+    - "Both served as US Senators from Illinois."
+    - "Signed the Paris Peace Accords together."
+    - "Married from 1990 to 2005."
+    
+    ### OUTPUT
+    Return ONLY the sentence. No intro, no quotes.
+    """
+    
+    retries = 0
+    max_retries = 3
+    
+    while retries < max_retries:
+        try:
+            model = genai.GenerativeModel('gemini-flash-latest')
+            response = await model.generate_content_async(system_prompt)
+            return response.text.strip()
+        except Exception as e:
+            if "429" in str(e) or "quota" in str(e).lower():
+                print(f"Rate limit hit during context gen for {person1}-{person2}. Rotating key...")
+                rotate_api_key()
+                await asyncio.sleep(1)
+                retries += 1
+            else:
+                print(f"Error generating context: {e}")
+                return "Connected"
+                
+    return "Connected"

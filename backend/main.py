@@ -81,8 +81,9 @@ async def get_page_details(titles: List[str]) -> List[PageDetail]:
 @app.get("/api/search")
 async def search_wikipedia(q: str = Query(..., min_length=1)):
     """
-    Smart search with fuzzy matching and name normalization.
-    Handles names with/without diacritics, typos, and multiple languages.
+    Search Wikipedia for people only.
+    Uses generator=prefixsearch to find titles starting with query,
+    and filters results based on title and description to ensure they are humans.
     """
     headers = {
         "User-Agent": "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"
@@ -90,28 +91,49 @@ async def search_wikipedia(q: str = Query(..., min_length=1)):
     
     async with httpx.AsyncClient(headers=headers) as client:
         try:
-            # Use smart name search for better fuzzy matching
-            best_match, suggestions = await smart_name_search(q, client)
-            
-            if not suggestions:
-                return []
-            
-            # Filter to only people using the existing logic
             url = "https://en.wikipedia.org/w/api.php"
             
-            # Get descriptions for filtering
+            # Use generator=prefixsearch to get results + properties in one go
             params = {
                 "action": "query",
                 "format": "json",
-                "titles": "|".join(suggestions[:10]),
-                "prop": "pageterms",
-                "wbptterms": "description"
+                "generator": "prefixsearch",
+                "gpssearch": q,
+                "gpslimit": 20, # Fetch more to allow for filtering
+                "prop": "pageterms|pageimages|description", # Get description and images
+                "wbptterms": "description",
+                "piprop": "thumbnail",
+                "pithumbsize": 50,
+                "pilimit": 20
             }
             
             response = await client.get(url, params=params)
             data = response.json()
             
-            pages = data.get("query", {}).get("pages", {})
+            # Results are in pages dict, need to sort by index or relevance?
+            # prefixsearch returns pages, but order might be lost in dict?
+            # Actually, generator results are usually unordered in the dict.
+            # But prefixsearch usually returns them in relevance order in the 'query' -> 'pages' list?
+            # No, 'pages' is a dict by pageid.
+            # To get order, we might need 'index' property if available, or just trust the dict order (Python 3.7+ preserves insertion order if JSON decoder does).
+            # But Wikipedia API JSON output for pages is usually by pageid (numeric).
+            # Wait, `generator` output is unordered.
+            # If we want order, we might need to use `action=opensearch` for order, then fetch details?
+            # OR check if `index` is in the response.
+            # `generator` output typically has `index` attribute in the page object.
+            
+            pages_dict = data.get("query", {}).get("pages", {})
+            
+            # Convert to list and sort by index if available
+            pages_list = []
+            for page_id, page in pages_dict.items():
+                page["pageid"] = page_id
+                pages_list.append(page)
+            
+            # Sort by index (if present)
+            pages_list.sort(key=lambda x: x.get("index", 999))
+            
+            filtered_results = []
             
             # Keywords that strongly suggest a person
             person_keywords = [
@@ -120,7 +142,8 @@ async def search_wikipedia(q: str = Query(..., min_length=1)):
                 "artist", "writer", "director", "musician", "rapper", "model",
                 "comedian", "philosopher", "scientist", "inventor", "business",
                 "magnate", "monarch", "emperor", "footballer", "athlete", "given name",
-                "socialite", "personality", "human", "people", "author", "journalist", "activist"
+                "socialite", "personality", "human", "people", "author", "journalist", "activist",
+                "revolutionary", "general", "officer", "leader"
             ]
             
             # Keywords that strongly suggest non-people
@@ -131,42 +154,54 @@ async def search_wikipedia(q: str = Query(..., min_length=1)):
                 "transport", "station", "airport", "park", "place", "city", "capital",
                 "village", "town", "district", "province", "state", "country",
                 "river", "mountain", "lake", "sea", "ocean", "island", "planet",
-                "disambiguation", "list of", "school", "university", "college"
+                "disambiguation", "list of", "school", "university", "college",
+                "photograph", "painting", "sculpture", "organization", "company"
             ]
             
-            filtered_titles = []
-            
-            for _, page in pages.items():
+            # Title exclusion patterns
+            title_exclude_patterns = ["(photo)", "(film)", "(song)", "(book)", "(place)", "(band)", "(album)", "(city)", "(planet)"]
+
+            for page in pages_list:
                 title = page.get("title")
                 if not title:
                     continue
-                    
-                description = page.get("terms", {}).get("description", [""])[0].lower()
+                
+                # Get description from pageterms (Wikidata) or description (Short Description)
+                description = ""
+                if "terms" in page and "description" in page["terms"]:
+                    description = page["terms"]["description"][0]
+                elif "description" in page:
+                    description = page["description"]
+                
+                description_lower = description.lower()
                 title_lower = title.lower()
                 
-                # Explicit exclusions based on title patterns
-                if any(x in title_lower for x in ["(band)", "(album)", "(song)", "(city)", "(planet)", "(place)"]):
+                # 1. Reject based on Title
+                if any(x in title_lower for x in title_exclude_patterns):
                     continue
                 
-                # Special case for specific cities  
-                if title in ["Paris", "London", "Berlin", "Tokyo", "New York"] and ("capital" in description or "city" in description):
+                # Special case for cities
+                if title in ["Paris", "London", "Berlin", "Tokyo", "New York"] and ("capital" in description_lower or "city" in description_lower):
                     continue
 
-                # Tokenize description for word-based matching
-                desc_tokens = set(re.findall(r'\b\w+\b', description))
+                # 2. Reject based on Description
+                desc_tokens = set(re.findall(r'\b\w+\b', description_lower))
                 
-                is_person = any(k in desc_tokens for k in person_keywords)
                 is_excluded = any(k in desc_tokens for k in exclude_keywords)
-                
-                # Exclusion takes precedence
                 if is_excluded:
                     continue
-                
-                # Include if it's a person OR description is empty (likely a name)
-                if is_person or not description:
-                    filtered_titles.append(title)
                     
-            return filtered_titles[:10]
+                # 3. Keep if Person
+                is_person = any(k in desc_tokens for k in person_keywords)
+                
+                # Also accept if description is empty (might be a person without description) 
+                # UNLESS title looks suspicious? No, let's be lenient with empty descriptions for now.
+                if is_person or not description:
+                    filtered_results.append(title)
+                    if len(filtered_results) >= 10:
+                        break
+                        
+            return filtered_results
             
         except Exception as e:
             print(f"Error searching Wikipedia: {e}")
@@ -203,27 +238,48 @@ async def get_shortest_path(request: PathRequest):
     }
     
     async with httpx.AsyncClient(headers=headers, timeout=10.0) as resolve_client:
-        resolved_start = await resolve_wikipedia_name(request.start_page, resolve_client)
-        resolved_end = await resolve_wikipedia_name(request.end_page, resolve_client)
-        
-        start_page = resolved_start if resolved_start else request.start_page
-        end_page = resolved_end if resolved_end else request.end_page
-        
-        if resolved_start != request.start_page:
-            print(f"RESOLVED: '{request.start_page}' → '{resolved_start}'")
-        if resolved_end != request.end_page:
-            print(f"RESOLVED: '{request.end_page}' → '{resolved_end}'")
+        start_page = await resolve_wikipedia_name(request.start_page, resolve_client) or request.start_page
+        end_page = await resolve_wikipedia_name(request.end_page, resolve_client) or request.end_page
     
-    print(f"Received request: Start='{start_page}', End='{end_page}'")
-    
+    print(f"Resolved: {request.start_page} -> {start_page}")
+    print(f"Resolved: {request.end_page} -> {end_page}")
+
     async def event_generator():
         try:
             async for message in find_shortest_path(start_page, end_page):
                 data = json.loads(message)
                 if data["status"] == "finished":
                     # Fetch details for the final path
-                    path_details = await get_page_details(data["path"])
-                    final_response = {"status": "finished", "path": [p.dict() for p in path_details]}
+                    path_nodes = data["path"]
+                    path_details = await get_page_details(path_nodes)
+                    
+                    # Generate context for edges
+                    enriched_path = []
+                    for i in range(len(path_nodes) - 1):
+                        p1 = path_nodes[i]
+                        p2 = path_nodes[i+1]
+                        
+                        # Find detail object
+                        p1_detail = next((d for d in path_details if d.title == p1), None)
+                        
+                        context = await generate_relationship_context(p1, p2)
+                        
+                        if p1_detail:
+                            enriched_path.append({
+                                "node": p1_detail.dict(),
+                                "edge_context": context
+                            })
+                    
+                    # Add last node
+                    last_node = path_nodes[-1]
+                    last_detail = next((d for d in path_details if d.title == last_node), None)
+                    if last_detail:
+                        enriched_path.append({
+                            "node": last_detail.dict(),
+                            "edge_context": None # End of path
+                        })
+
+                    final_response = {"status": "finished", "path_with_context": enriched_path}
                     yield json.dumps(final_response) + "\n"
                 else:
                     yield message + "\n"

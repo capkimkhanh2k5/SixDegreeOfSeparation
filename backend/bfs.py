@@ -35,117 +35,134 @@ def save_cache():
 load_cache()
 
 class BidirectionalLevelBasedSearch:
-    def __init__(self, start_page: str, end_page: str, client: httpx.AsyncClient):
-        self.start_page = start_page
-        self.end_page = end_page
-        self.client = client
+    def __init__(self):
+        self.client = None
+        self.start_page = None
+        self.end_page = None
+        self.MAX_DEGREE = 30
+        self.MAX_DEPTH = 10
+        self.step_count = 0
+        self.semaphore = asyncio.Semaphore(20) # Limit concurrent requests
         
-        # Queues: (node, path_list)
-        # Forward: Path from Start -> Node
-        self.queue_f = deque([(start_page, [start_page])])
-        # Backward: Path from End -> Node (reversed direction)
-        self.queue_b = deque([(end_page, [end_page])])
-        
-        # Visited: node -> path_list
-        self.visited_f = {start_page: [start_page]}
-        self.visited_b = {end_page: [end_page]}
-        
-        # Config
-        self.MAX_DEGREE = 15  # Slightly increased for better coverage
-        self.MAX_DEPTH = 10   # Total path length limit
-        self.semaphore = asyncio.Semaphore(10) # Increased concurrency
+        # Queues and visited sets will be initialized in search()
+        self.queue_f = None
+        self.queue_b = None
+        self.visited_f = None
+        self.visited_b = None
         
         self.step_count = 0
 
-    async def search(self) -> AsyncGenerator[str, None]:
+    async def search(self, start_node: str, end_node: str) -> AsyncGenerator[str, None]:
         """
         Executes Bidirectional BFS.
         Yields JSON status messages.
         """
-        yield json.dumps({"status": "info", "message": f"Initializing Bidirectional Search: {self.start_page} <-> {self.end_page}"})
+        self.start_page = start_node
+        self.end_page = end_node
+        
+        import time
+        start_time = time.time()
+        TIMEOUT = 60  # seconds
+        MAX_NODES_VISITED = 2000
+        
+        # Initialize queues and visited sets for a new search
+        self.queue_f = deque([(self.start_page, [self.start_page])])
+        self.visited_f = {self.start_page: [self.start_page]}
+        
+        self.queue_b = deque([(self.end_page, [self.end_page])])
+        self.visited_b = {self.end_page: [self.end_page]}
+        
+        self.step_count = 0 # Reset step count for a new search
+        
+        # Configure client with higher concurrency limits
+        limits = httpx.Limits(max_keepalive_connections=20, max_connections=30)
+        async with httpx.AsyncClient(limits=limits, timeout=10.0) as client:
+            self.client = client # Overwrite the client with the new one for this search
+            
+            yield json.dumps({"status": "info", "message": f"Initializing Bidirectional Search: {self.start_page} <-> {self.end_page}"})
 
-        while self.queue_f and self.queue_b:
-            self.step_count += 1
-            
-            # Check if we exceeded depth (heuristic: sum of depths)
-            # Since we don't store depth explicitly in queue for simplicity, we can check path length
-            if len(self.queue_f[0][1]) + len(self.queue_b[0][1]) > self.MAX_DEPTH:
-                yield json.dumps({"status": "error", "message": "Max depth exceeded."})
-                return
+            while self.queue_f and self.queue_b:
+                # Safety Checks
+                if time.time() - start_time > TIMEOUT:
+                    yield json.dumps({"status": "error", "message": f"Search timed out after {TIMEOUT} seconds."})
+                    return
 
-            # Expand the smaller frontier
-            if len(self.queue_f) <= len(self.queue_b):
-                direction = "forward"
-                queue = self.queue_f
-                visited_own = self.visited_f
-                visited_other = self.visited_b
-            else:
-                direction = "backward"
-                queue = self.queue_b
-                visited_own = self.visited_b
-                visited_other = self.visited_f
+                total_visited = len(self.visited_f) + len(self.visited_b)
+                if total_visited > MAX_NODES_VISITED:
+                    yield json.dumps({"status": "error", "message": f"Search limit exceeded ({MAX_NODES_VISITED} nodes)."})
+                    return
 
-            # Process one level
-            # We pop all nodes at the current level to process them in parallel
-            # But for simplicity and responsiveness, let's process a batch
-            batch_size = 5
-            level_nodes = []
-            for _ in range(min(len(queue), batch_size)):
-                level_nodes.append(queue.popleft())
-            
-            print(f"DEBUG: Processing {len(level_nodes)} nodes in {direction} direction...")
-            
-            tasks = [self.process_node(node, path, direction) for node, path in level_nodes]
-            results = await asyncio.gather(*tasks)
-            
-            for result in results:
-                if not result:
-                    continue
+                self.step_count += 1
                 
-                parent_node = result["node"]
-                children = result["children"]
+                # Expand the smaller frontier
+                if len(self.queue_f) <= len(self.queue_b):
+                    direction = "forward"
+                    queue = self.queue_f
+                    visited_own = self.visited_f
+                    visited_other = self.visited_b
+                else:
+                    direction = "backward"
+                    queue = self.queue_b
+                    visited_own = self.visited_b
+                    visited_other = self.visited_f
+
+                # Process one level (Batch size increased for concurrency)
+                batch_size = 20
+                level_nodes = []
+                for _ in range(min(len(queue), batch_size)):
+                    level_nodes.append(queue.popleft())
                 
+                # Notify UI
+                current_nodes = [n[0] for n in level_nodes]
                 yield json.dumps({
-                    "status": "visiting",
-                    "node": parent_node,
-                    "direction": direction,
-                    "step": self.step_count,
-                    "found_count": len(children)
+                    "status": "exploring", 
+                    "direction": direction, 
+                    "nodes": current_nodes,
+                    "stats": {
+                        "visited": total_visited,
+                        "queue_f": len(self.queue_f),
+                        "queue_b": len(self.queue_b),
+                        "time": round(time.time() - start_time, 1)
+                    }
                 })
-
-                for child in children:
-                    if child in visited_own:
+                
+                tasks = [self.process_node(node, path, direction) for node, path in level_nodes]
+                results = await asyncio.gather(*tasks)
+                
+                for result in results:
+                    if not result:
                         continue
+                        
+                    node, children, path = result["node"], result["children"], result["path"]
                     
-                    new_path = result["path"] + [child]
-                    visited_own[child] = new_path
-                    queue.append((child, new_path))
-                    
-                    # Check for intersection
-                    if child in visited_other:
-                        path_f = self.visited_f[child] if direction == "forward" else self.visited_f[child]
-                        path_b = self.visited_b[child] if direction == "backward" else self.visited_b[child]
+                    for child in children:
+                        if child in visited_own:
+                            continue
+                            
+                        new_path = path + [child]
+                        visited_own[child] = new_path
+                        queue.append((child, new_path))
                         
-                        # Construct full path: Start -> ... -> Meeting -> ... -> End
-                        # path_b is End -> ... -> Meeting. We need to reverse it.
-                        # But wait, path_b is stored as [End, ..., Meeting]
-                        # So we reverse path_b[:-1] and append?
-                        # No, path_b is [End, Y, X, Meeting].
-                        # We want Meeting -> X -> Y -> End.
-                        # So we take path_b reversed.
-                        # But path_b includes Meeting. path_f includes Meeting.
-                        # path_f: [Start, A, Meeting]
-                        # path_b: [End, B, Meeting]
-                        # Full: [Start, A, Meeting, B, End]
-                        
-                        full_path_list = path_f[:-1] + path_b[::-1]
-                        
-                        yield json.dumps({"status": "finished", "path": full_path_list})
-                        return
+                        # Check for intersection
+                        if child in visited_other:
+                            # Path found!
+                            path_a = new_path
+                            path_b = visited_other[child]
+                            
+                            if direction == "forward":
+                                full_path = path_a[:-1] + path_b[::-1]
+                            else: # direction == "backward"
+                                full_path = path_b[:-1] + path_a[::-1]
+                                
+                            yield json.dumps({"status": "finished", "path": full_path})
+                            return
+
+                # Depth limit check (optional, but good practice)
+                if self.step_count > 100: # Safety break for loop count
+                     yield json.dumps({"status": "error", "message": "Search depth limit exceeded."})
+                     return
             
-            save_cache()
-            
-        yield json.dumps({"status": "error", "message": "No path found."})
+            yield json.dumps({"status": "not_found", "message": "No path found."})
 
     async def process_node(self, current_node: str, path: List[str], direction: str):
         async with self.semaphore:
@@ -157,52 +174,185 @@ class BidirectionalLevelBasedSearch:
                     target_for_llm = self.end_page
                 else:
                     # Get incoming links (backlinks)
-                    # For backward search, we don't have the "source" text easily.
-                    # We just get a list of pages that link TO current_node.
                     candidates = await self.get_backlinks(current_node)
                     wiki_text = "" # No context for backlinks yet
                     target_for_llm = self.start_page
 
-                # 2. Heuristic Filter
+                # 2. Heuristic Filter (Name-based)
                 filtered_candidates = self.heuristic_filter(candidates)
                 
-                # 3. Verification
-                # For backward search, LLM verification is tricky without text.
-                # We will skip LLM for backward search OR use a very lightweight check if needed.
-                # For now, let's skip LLM for backward to be fast, but rely on strict Heuristics.
-                # OR: We can just take the top N candidates.
+                # Shuffle to avoid alphabetical bias (e.g. getting stuck in "10th...", "11th...")
+                import random
+                random.shuffle(filtered_candidates)
                 
-                final_candidates = []
+                # 3. Strict Person Check (Category-based)
+                # We can't check all, so let's take top 500 from heuristic and check them
+                candidates_to_check = filtered_candidates[:500]
+                human_candidates = await self.batch_check_categories(candidates_to_check)
                 
-                if direction == "forward":
-                    # Use LLM to verify and rank
-                    candidates_for_llm = filtered_candidates[:60] # Limit input
-                    verified_objs = await verify_candidates_with_llm(
-                        wiki_text, 
-                        current_node, 
-                        target_name=target_for_llm, 
-                        candidates=candidates_for_llm
-                    )
-                    final_candidates = [obj["name"] for obj in verified_objs]
-                    
-                    # Fallback if LLM returns nothing but we had candidates
-                    if not final_candidates and candidates_for_llm:
-                        print(f"DEBUG: {current_node} - LLM returned 0, falling back to top 10 heuristic candidates.")
-                        final_candidates = candidates_for_llm[:10]
-                else:
-                    # Backward: Just take top filtered candidates (maybe random or just first few?)
-                    # Backlinks are usually sorted by something? No.
-                    # We'll take top 20 to avoid explosion.
-                    final_candidates = filtered_candidates[:20]
-                
-                # Keep top N
-                top_candidates = final_candidates[:self.MAX_DEGREE]
-                
-                return {"node": current_node, "children": top_candidates, "path": path}
+                print(f"DEBUG: {current_node} - Candidates: {len(candidates)} -> Heuristic: {len(filtered_candidates)} -> Checked: {len(candidates_to_check)} -> Human: {len(human_candidates)}")
 
+                # 4. LLM Verification (Optional - Disabled for speed/benchmark)
+                # For strict person graph, category check is usually enough.
+                # LLM is too slow (rate limits) for real-time BFS.
+                final_candidates = human_candidates
+                
+                # If we have too many, take top N
+                if len(final_candidates) > self.MAX_DEGREE:
+                     final_candidates = final_candidates[:self.MAX_DEGREE]
+                     
+                return {
+                    "node": current_node,
+                    "children": final_candidates,
+                    "path": path
+                }
             except Exception as e:
                 print(f"Error processing node {current_node} ({direction}): {e}")
                 return None
+    
+    async def batch_check_categories(self, titles: List[str]) -> List[str]:
+        """
+        Checks if the given titles are humans based on Wikipedia categories.
+        Returns a list of titles that are confirmed humans.
+        """
+        if not titles:
+            return []
+            
+        # Chunk into batches of 10
+        chunk_size = 10
+        batches = [titles[i:i+chunk_size] for i in range(0, len(titles), chunk_size)]
+        
+        async def check_batch(batch):
+            human_titles_batch = []
+            # Ensure titles are properly encoded/joined
+            titles_param = "|".join(batch)
+            
+            params = {
+                "action": "query",
+                "format": "json",
+                "titles": titles_param,
+                "prop": "categories",
+                "cllimit": "max",
+                "redirects": 1
+            }
+            
+            headers = {
+                "User-Agent": "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"
+            }
+            
+            try:
+                # Use semaphore to respect concurrency limits
+                async with self.semaphore:
+                    resp = await self.client.get(API_URL, params=params, headers=headers)
+                
+                if resp.status_code != 200:
+                    print(f"API Error: Status {resp.status_code} for batch check")
+                    return []
+                    
+                try:
+                    data = resp.json()
+                except json.JSONDecodeError:
+                    print(f"API Error: Invalid JSON response for batch check. Response text: {resp.text[:100]}...")
+                    return []
+                    
+                pages = data.get("query", {}).get("pages", {})
+                for _, page in pages.items():
+                    title = page.get("title")
+                    
+                    # Skip missing pages
+                    if "missing" in page:
+                        continue
+                        
+                    categories = [c["title"].lower() for c in page.get("categories", [])]
+                    
+                    # Strip "Category:" prefix for cleaner checks
+                    clean_categories = []
+                    for c in categories:
+                        if c.startswith("category:"):
+                            clean_categories.append(c[9:])
+                        else:
+                            clean_categories.append(c)
+                    
+                    # Strict Person Check
+                    is_human = False
+                    is_excluded = False
+                    
+                    # 1. Negative Filters (Exclude animals, fictional characters)
+                    # "cat" is too dangerous as substring (matches "Category", "Catholic", etc.)
+                    # Use specific animal terms or word boundaries if needed.
+                    negative_keywords = ["animal", "horse", "racehorse", "fictional", "character"]
+                    
+                    for cat in clean_categories:
+                        # Check full word match or specific phrases to avoid false positives
+                        if any(k in cat for k in negative_keywords):
+                            # Double check it's not "Animal rights activists" etc.
+                            if "activist" in cat or "trainer" in cat or "owner" in cat or "breeder" in cat:
+                                continue
+                            is_excluded = True
+                            break
+                    
+                    if is_excluded:
+                        continue
+
+                    # 2. Positive Filters (Must match at least one)
+                    # "births" -> "1990 births" (avoid "births by...")
+                    # "deaths" -> "2020 deaths" (avoid "deaths by...")
+                    
+                    for cat in categories:
+                        if "living people" in cat:
+                            is_human = True
+                            break
+                        if "people from" in cat:
+                            is_human = True
+                            break
+                        if "alumni" in cat:
+                            is_human = True
+                            break
+                        if "players" in cat:
+                            is_human = True
+                            break
+                        if "actors" in cat or "actresses" in cat:
+                            is_human = True
+                            break
+                        if "politicians" in cat:
+                            is_human = True
+                            break
+                        if "singers" in cat or "musicians" in cat:
+                            is_human = True
+                            break
+                        if "writers" in cat:
+                            is_human = True
+                            break
+                        if "directors" in cat:
+                            is_human = True
+                            break
+                        
+                        # Check for Year Births/Deaths
+                        # e.g., "Category:1946 births"
+                        # We want to match "\d{4} births" exactly at end or start
+                        import re
+                        if re.search(r'\d{4} births', cat) and "animal" not in cat:
+                            is_human = True
+                            break
+                        if re.search(r'\d{4} deaths', cat) and "animal" not in cat:
+                            is_human = True
+                            break
+
+                    if is_human:
+                        human_titles_batch.append(title)
+            except Exception as e:
+                print(f"Error checking categories for batch: {e}")
+                pass
+            
+            return human_titles_batch
+
+        # Run all batches in parallel
+        tasks = [check_batch(batch) for batch in batches]
+        results = await asyncio.gather(*tasks)
+        
+        # Flatten results
+        human_titles = [title for batch_result in results for title in batch_result]
+        return human_titles
 
     async def get_page_data(self, title: str) -> Tuple[str, List[str]]:
         # Check cache
