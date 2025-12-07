@@ -5,36 +5,125 @@ from collections import deque
 from typing import List, Set, Dict, Optional, AsyncGenerator, Tuple
 from .llm_client import verify_candidates_with_llm
 import os
+import re
+import random
 
 # Wikipedia API Endpoint
 API_URL = "https://en.wikipedia.org/w/api.php"
 
-# Persistent Cache Implementation
+# ============================================================
+# PERSISTENT CACHE IMPLEMENTATION (Optimized for Extreme Cases)
+# ============================================================
 CACHE_FILE = "wiki_cache.json"
+CATEGORY_CACHE_FILE = "category_cache.json"
+BACKLINK_CACHE_FILE = "backlink_cache.json"
+
 _page_cache = {}
+_category_cache = {}  # title -> bool (is_human) - NEW: Prevents redundant API calls
+_backlink_cache = {}  # title -> List[str] - NEW: Cache backlinks
 
 def load_cache():
-    global _page_cache
+    """Load all caches from disk."""
+    global _page_cache, _category_cache, _backlink_cache
+    
+    # Load page cache
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, 'r') as f:
                 _page_cache = json.load(f)
-            print(f"Loaded {len(_page_cache)} items from cache.")
+            print(f"[CACHE] Loaded {len(_page_cache)} page items.")
         except Exception as e:
-            print(f"Failed to load cache: {e}")
+            print(f"[CACHE] Failed to load page cache: {e}")
+    
+    # Load category cache
+    if os.path.exists(CATEGORY_CACHE_FILE):
+        try:
+            with open(CATEGORY_CACHE_FILE, 'r') as f:
+                _category_cache = json.load(f)
+            print(f"[CACHE] Loaded {len(_category_cache)} category items.")
+        except Exception as e:
+            print(f"[CACHE] Failed to load category cache: {e}")
+    
+    # Load backlink cache
+    if os.path.exists(BACKLINK_CACHE_FILE):
+        try:
+            with open(BACKLINK_CACHE_FILE, 'r') as f:
+                _backlink_cache = json.load(f)
+            print(f"[CACHE] Loaded {len(_backlink_cache)} backlink items.")
+        except Exception as e:
+            print(f"[CACHE] Failed to load backlink cache: {e}")
 
 def save_cache():
-    global _page_cache
+    """Save all caches to disk."""
+    global _page_cache, _category_cache, _backlink_cache
+    
     try:
         with open(CACHE_FILE, 'w') as f:
             json.dump(_page_cache, f)
     except Exception as e:
-        print(f"Failed to save cache: {e}")
+        print(f"[CACHE] Failed to save page cache: {e}")
+    
+    try:
+        with open(CATEGORY_CACHE_FILE, 'w') as f:
+            json.dump(_category_cache, f)
+    except Exception as e:
+        print(f"[CACHE] Failed to save category cache: {e}")
+    
+    try:
+        with open(BACKLINK_CACHE_FILE, 'w') as f:
+            json.dump(_backlink_cache, f)
+    except Exception as e:
+        print(f"[CACHE] Failed to save backlink cache: {e}")
 
 # Load cache on module import
 load_cache()
 
+# ============================================================
+# OPTIMIZED HISTORICAL FIGURE KEYWORDS
+# ============================================================
+# Positive keywords that indicate a human (expanded for historical figures)
+PERSON_POSITIVE_KEYWORDS = [
+    # Modern professions
+    "living people", "people from", "alumni", "players", "actors", "actresses",
+    "politicians", "singers", "musicians", "writers", "directors", "scientists",
+    "businesspeople", "entrepreneurs", "athletes", "journalists", "activists",
+    
+    # Historical figures (NEW - Critical for Genghis Khan case)
+    "emperors", "monarchs", "khans", "sultans", "pharaohs", "tsars", "czars",
+    "kings", "queens", "princes", "princesses", "dukes", "counts", "barons",
+    "generals", "commanders", "admirals", "marshals", "warlords",
+    "conquerors", "rulers", "regents", "caliphs", "popes", "patriarchs",
+    
+    # Scholars and thinkers
+    "philosophers", "theologians", "historians", "mathematicians", "inventors",
+    
+    # Birth/death year patterns handled separately
+]
+
+# Negative keywords (exclude non-humans)
+PERSON_NEGATIVE_KEYWORDS = [
+    "animal", "horse", "racehorse", "dog", "cat breed", "species",
+    "fictional", "character", "mythology", "mythological",
+    "band", "musical group", "company", "organization", "corporation",
+    "film", "movie", "song", "album", "book", "novel", "game",
+    "place", "city", "country", "river", "mountain", "building",
+    "event", "battle", "war", "treaty", "conference",  # Exclude events
+    "dynasty", "empire", "kingdom",  # Exclude polities
+]
+
+
 class BidirectionalLevelBasedSearch:
+    """
+    Optimized Bidirectional BFS for finding paths between Wikipedia articles.
+    
+    Optimizations applied:
+    1. Category caching to avoid redundant API calls
+    2. Backlink caching for popular targets
+    3. Memory-efficient visited sets (parent pointers only)
+    4. Historical figure detection for ancient personalities
+    5. Robust exception handling
+    """
+    
     def __init__(self):
         self.client = None
         self.start_page = None
@@ -42,19 +131,33 @@ class BidirectionalLevelBasedSearch:
         self.MAX_DEGREE = 30
         self.MAX_DEPTH = 10
         self.step_count = 0
-        self.semaphore = asyncio.Semaphore(20) # Limit concurrent requests
+        self.semaphore = asyncio.Semaphore(20)  # Limit concurrent requests
         
-        # Queues and visited sets will be initialized in search()
+        # Queues: (node, path_list)
         self.queue_f = None
         self.queue_b = None
-        self.visited_f = None
-        self.visited_b = None
         
-        self.step_count = 0
+        # OPTIMIZATION: Memory-efficient visited sets
+        # Store {child: parent} instead of {child: [full, path, list]}
+        # Path is reconstructed on demand when intersection is found
+        self.parent_f = None  # Forward: child -> parent
+        self.parent_b = None  # Backward: child -> parent
+
+    def _reconstruct_path(self, node: str, parent_map: Dict[str, Optional[str]], reverse: bool = False) -> List[str]:
+        """Reconstruct path from parent pointers."""
+        path = []
+        current = node
+        while current is not None:
+            path.append(current)
+            current = parent_map.get(current)
+        
+        if reverse:
+            return path
+        return path[::-1]
 
     async def search(self, start_node: str, end_node: str) -> AsyncGenerator[str, None]:
         """
-        Executes Bidirectional BFS.
+        Executes Bidirectional BFS with optimized memory usage.
         Yields JSON status messages.
         """
         self.start_page = start_node
@@ -65,166 +168,196 @@ class BidirectionalLevelBasedSearch:
         TIMEOUT = 60  # seconds
         MAX_NODES_VISITED = 2000
         
-        # Initialize queues and visited sets for a new search
-        self.queue_f = deque([(self.start_page, [self.start_page])])
-        self.visited_f = {self.start_page: [self.start_page]}
+        # OPTIMIZATION: Use parent pointers instead of full paths
+        self.queue_f = deque([self.start_page])
+        self.parent_f = {self.start_page: None}  # Root has no parent
         
-        self.queue_b = deque([(self.end_page, [self.end_page])])
-        self.visited_b = {self.end_page: [self.end_page]}
+        self.queue_b = deque([self.end_page])
+        self.parent_b = {self.end_page: None}  # Root has no parent
         
-        self.step_count = 0 # Reset step count for a new search
+        self.step_count = 0
         
         # Configure client with higher concurrency limits
         limits = httpx.Limits(max_keepalive_connections=20, max_connections=30)
         async with httpx.AsyncClient(limits=limits, timeout=10.0) as client:
-            self.client = client # Overwrite the client with the new one for this search
+            self.client = client
             
-            yield json.dumps({"status": "info", "message": f"Initializing Bidirectional Search: {self.start_page} <-> {self.end_page}"})
+            yield json.dumps({
+                "status": "info", 
+                "message": f"Initializing Bidirectional Search: {self.start_page} <-> {self.end_page}"
+            })
 
             while self.queue_f and self.queue_b:
                 # Safety Checks
-                if time.time() - start_time > TIMEOUT:
-                    yield json.dumps({"status": "error", "message": f"Search timed out after {TIMEOUT} seconds."})
+                elapsed = time.time() - start_time
+                if elapsed > TIMEOUT:
+                    save_cache()  # Save progress before timeout
+                    yield json.dumps({
+                        "status": "error", 
+                        "message": f"Search timed out after {TIMEOUT} seconds."
+                    })
                     return
 
-                total_visited = len(self.visited_f) + len(self.visited_b)
+                total_visited = len(self.parent_f) + len(self.parent_b)
                 if total_visited > MAX_NODES_VISITED:
-                    yield json.dumps({"status": "error", "message": f"Search limit exceeded ({MAX_NODES_VISITED} nodes)."})
+                    save_cache()
+                    yield json.dumps({
+                        "status": "error", 
+                        "message": f"Search limit exceeded ({MAX_NODES_VISITED} nodes)."
+                    })
                     return
 
                 self.step_count += 1
                 
-                # Expand the smaller frontier
+                # Expand the smaller frontier (BFS optimization)
                 if len(self.queue_f) <= len(self.queue_b):
                     direction = "forward"
                     queue = self.queue_f
-                    visited_own = self.visited_f
-                    visited_other = self.visited_b
+                    parent_own = self.parent_f
+                    parent_other = self.parent_b
                 else:
                     direction = "backward"
                     queue = self.queue_b
-                    visited_own = self.visited_b
-                    visited_other = self.visited_f
+                    parent_own = self.parent_b
+                    parent_other = self.parent_f
 
-                # Process one level (Batch size increased for concurrency)
+                # Process one level (batch for concurrency)
                 batch_size = 20
                 level_nodes = []
                 for _ in range(min(len(queue), batch_size)):
                     level_nodes.append(queue.popleft())
                 
                 # Notify UI
-                current_nodes = [n[0] for n in level_nodes]
                 yield json.dumps({
                     "status": "exploring", 
                     "direction": direction, 
-                    "nodes": current_nodes,
+                    "nodes": level_nodes,
                     "stats": {
                         "visited": total_visited,
                         "queue_f": len(self.queue_f),
                         "queue_b": len(self.queue_b),
-                        "time": round(time.time() - start_time, 1)
+                        "time": round(elapsed, 1)
                     }
                 })
                 
-                tasks = [self.process_node(node, path, direction) for node, path in level_nodes]
-                results = await asyncio.gather(*tasks)
+                # OPTIMIZATION: Robust exception handling with return_exceptions
+                tasks = [
+                    self.process_node(node, direction) 
+                    for node in level_nodes
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
                 
-                for result in results:
+                for i, result in enumerate(results):
+                    # Handle exceptions gracefully
+                    if isinstance(result, Exception):
+                        print(f"[ERROR] Task failed for node: {level_nodes[i]}: {result}")
+                        continue
                     if not result:
                         continue
                         
-                    node, children, path = result["node"], result["children"], result["path"]
+                    current_node, children = result["node"], result["children"]
                     
                     for child in children:
-                        if child in visited_own:
-                            continue
+                        if child in parent_own:
+                            continue  # Already visited from this direction
                             
-                        new_path = path + [child]
-                        visited_own[child] = new_path
-                        queue.append((child, new_path))
+                        parent_own[child] = current_node  # Store parent pointer
+                        queue.append(child)
                         
                         # Check for intersection
-                        if child in visited_other:
-                            # Path found!
-                            path_a = new_path
-                            path_b = visited_other[child]
-                            
+                        if child in parent_other:
+                            # Path found! Reconstruct from parent pointers
                             if direction == "forward":
-                                full_path = path_a[:-1] + path_b[::-1]
-                            else: # direction == "backward"
-                                full_path = path_b[:-1] + path_a[::-1]
-                                
+                                path_f = self._reconstruct_path(child, self.parent_f)
+                                path_b = self._reconstruct_path(child, self.parent_b, reverse=True)
+                                full_path = path_f[:-1] + path_b  # Avoid duplicating intersection node
+                            else:
+                                path_f = self._reconstruct_path(child, self.parent_f)
+                                path_b = self._reconstruct_path(child, self.parent_b, reverse=True)
+                                full_path = path_f[:-1] + path_b
+                            
+                            save_cache()  # Save cache on success
                             yield json.dumps({"status": "finished", "path": full_path})
                             return
 
-                # Depth limit check (optional, but good practice)
-                if self.step_count > 100: # Safety break for loop count
-                     yield json.dumps({"status": "error", "message": "Search depth limit exceeded."})
-                     return
+                # Depth limit check
+                if self.step_count > 100:
+                    save_cache()
+                    yield json.dumps({
+                        "status": "error", 
+                        "message": "Search depth limit exceeded."
+                    })
+                    return
             
+            save_cache()
             yield json.dumps({"status": "not_found", "message": "No path found."})
 
-    async def process_node(self, current_node: str, path: List[str], direction: str):
+    async def process_node(self, current_node: str, direction: str) -> Optional[Dict]:
+        """Process a single node and return its valid human children."""
         async with self.semaphore:
             try:
                 # 1. Fetch Candidates
                 if direction == "forward":
-                    # Get outgoing links
                     wiki_text, candidates = await self.get_page_data(current_node)
-                    target_for_llm = self.end_page
                 else:
-                    # Get incoming links (backlinks)
                     candidates = await self.get_backlinks(current_node)
-                    wiki_text = "" # No context for backlinks yet
-                    target_for_llm = self.start_page
 
                 # 2. Heuristic Filter (Name-based)
                 filtered_candidates = self.heuristic_filter(candidates)
                 
-                # Shuffle to avoid alphabetical bias (e.g. getting stuck in "10th...", "11th...")
-                import random
+                # Shuffle to avoid alphabetical bias
                 random.shuffle(filtered_candidates)
                 
-                # 3. Strict Person Check (Category-based)
-                # We can't check all, so let's take top 500 from heuristic and check them
+                # 3. Strict Person Check (Category-based with CACHING)
                 candidates_to_check = filtered_candidates[:500]
                 human_candidates = await self.batch_check_categories(candidates_to_check)
                 
-                print(f"DEBUG: {current_node} - Candidates: {len(candidates)} -> Heuristic: {len(filtered_candidates)} -> Checked: {len(candidates_to_check)} -> Human: {len(human_candidates)}")
+                print(f"[DEBUG] {current_node} ({direction}): "
+                      f"{len(candidates)} -> {len(filtered_candidates)} -> {len(human_candidates)} humans")
 
-                # 4. LLM Verification (Optional - Disabled for speed/benchmark)
-                # For strict person graph, category check is usually enough.
-                # LLM is too slow (rate limits) for real-time BFS.
-                final_candidates = human_candidates
-                
-                # If we have too many, take top N
-                if len(final_candidates) > self.MAX_DEGREE:
-                     final_candidates = final_candidates[:self.MAX_DEGREE]
-                     
+                # 4. Limit final candidates
+                final_candidates = human_candidates[:self.MAX_DEGREE]
+                      
                 return {
                     "node": current_node,
                     "children": final_candidates,
-                    "path": path
                 }
             except Exception as e:
-                print(f"Error processing node {current_node} ({direction}): {e}")
+                print(f"[ERROR] Processing node {current_node} ({direction}): {e}")
                 return None
     
     async def batch_check_categories(self, titles: List[str]) -> List[str]:
         """
-        Checks if the given titles are humans based on Wikipedia categories.
-        Returns a list of titles that are confirmed humans.
+        Checks if titles are humans based on Wikipedia categories.
+        OPTIMIZATION: Uses category cache to avoid redundant API calls.
         """
+        global _category_cache
+        
         if not titles:
             return []
-            
-        # Chunk into batches of 10
-        chunk_size = 10
-        batches = [titles[i:i+chunk_size] for i in range(0, len(titles), chunk_size)]
         
-        async def check_batch(batch):
+        # OPTIMIZATION: Check cache first
+        cached_humans = []
+        uncached_titles = []
+        
+        for title in titles:
+            if title in _category_cache:
+                if _category_cache[title]:  # True = is human
+                    cached_humans.append(title)
+                # False = not human, skip
+            else:
+                uncached_titles.append(title)
+        
+        # If all cached, return immediately
+        if not uncached_titles:
+            return cached_humans
+        
+        # Chunk uncached into batches of 10
+        chunk_size = 10
+        batches = [uncached_titles[i:i+chunk_size] for i in range(0, len(uncached_titles), chunk_size)]
+        
+        async def check_batch(batch: List[str]) -> List[str]:
             human_titles_batch = []
-            # Ensure titles are properly encoded/joined
             titles_param = "|".join(batch)
             
             params = {
@@ -241,31 +374,31 @@ class BidirectionalLevelBasedSearch:
             }
             
             try:
-                # Use semaphore to respect concurrency limits
                 async with self.semaphore:
                     resp = await self.client.get(API_URL, params=params, headers=headers)
                 
                 if resp.status_code != 200:
-                    print(f"API Error: Status {resp.status_code} for batch check")
+                    print(f"[API] Error: Status {resp.status_code} for batch check")
                     return []
                     
                 try:
                     data = resp.json()
                 except json.JSONDecodeError:
-                    print(f"API Error: Invalid JSON response for batch check. Response text: {resp.text[:100]}...")
+                    print(f"[API] Invalid JSON response for batch check")
                     return []
                     
                 pages = data.get("query", {}).get("pages", {})
+                
                 for _, page in pages.items():
                     title = page.get("title")
                     
-                    # Skip missing pages
                     if "missing" in page:
+                        _category_cache[title] = False
                         continue
                         
                     categories = [c["title"].lower() for c in page.get("categories", [])]
                     
-                    # Strip "Category:" prefix for cleaner checks
+                    # Strip "Category:" prefix
                     clean_categories = []
                     for c in categories:
                         if c.startswith("category:"):
@@ -273,89 +406,86 @@ class BidirectionalLevelBasedSearch:
                         else:
                             clean_categories.append(c)
                     
-                    # Strict Person Check
-                    is_human = False
-                    is_excluded = False
+                    is_human = self._check_is_human(categories, clean_categories)
                     
-                    # 1. Negative Filters (Exclude animals, fictional characters)
-                    # "cat" is too dangerous as substring (matches "Category", "Catholic", etc.)
-                    # Use specific animal terms or word boundaries if needed.
-                    negative_keywords = ["animal", "horse", "racehorse", "fictional", "character"]
+                    # Cache the result
+                    _category_cache[title] = is_human
                     
-                    for cat in clean_categories:
-                        # Check full word match or specific phrases to avoid false positives
-                        if any(k in cat for k in negative_keywords):
-                            # Double check it's not "Animal rights activists" etc.
-                            if "activist" in cat or "trainer" in cat or "owner" in cat or "breeder" in cat:
-                                continue
-                            is_excluded = True
-                            break
-                    
-                    if is_excluded:
-                        continue
-
-                    # 2. Positive Filters (Must match at least one)
-                    # "births" -> "1990 births" (avoid "births by...")
-                    # "deaths" -> "2020 deaths" (avoid "deaths by...")
-                    
-                    for cat in categories:
-                        if "living people" in cat:
-                            is_human = True
-                            break
-                        if "people from" in cat:
-                            is_human = True
-                            break
-                        if "alumni" in cat:
-                            is_human = True
-                            break
-                        if "players" in cat:
-                            is_human = True
-                            break
-                        if "actors" in cat or "actresses" in cat:
-                            is_human = True
-                            break
-                        if "politicians" in cat:
-                            is_human = True
-                            break
-                        if "singers" in cat or "musicians" in cat:
-                            is_human = True
-                            break
-                        if "writers" in cat:
-                            is_human = True
-                            break
-                        if "directors" in cat:
-                            is_human = True
-                            break
-                        
-                        # Check for Year Births/Deaths
-                        # e.g., "Category:1946 births"
-                        # We want to match "\d{4} births" exactly at end or start
-                        import re
-                        if re.search(r'\d{4} births', cat) and "animal" not in cat:
-                            is_human = True
-                            break
-                        if re.search(r'\d{4} deaths', cat) and "animal" not in cat:
-                            is_human = True
-                            break
-
                     if is_human:
                         human_titles_batch.append(title)
+                        
             except Exception as e:
-                print(f"Error checking categories for batch: {e}")
-                pass
+                print(f"[ERROR] Checking categories for batch: {e}")
             
             return human_titles_batch
 
         # Run all batches in parallel
         tasks = [check_batch(batch) for batch in batches]
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Flatten results
-        human_titles = [title for batch_result in results for title in batch_result]
-        return human_titles
+        # Flatten results (filter out exceptions)
+        human_titles = []
+        for result in results:
+            if isinstance(result, Exception):
+                print(f"[ERROR] Batch check failed: {result}")
+                continue
+            human_titles.extend(result)
+        
+        return cached_humans + human_titles
+    
+    def _check_is_human(self, categories: List[str], clean_categories: List[str]) -> bool:
+        """
+        Determine if a Wikipedia article is about a human.
+        OPTIMIZATION: Expanded keywords for historical figures.
+        """
+        is_human = False
+        is_excluded = False
+        
+        # 1. Negative Filters (Exclude animals, fictional, non-persons)
+        for cat in clean_categories:
+            if any(neg in cat for neg in PERSON_NEGATIVE_KEYWORDS):
+                # Exception: human-related categories with animal terms
+                # e.g., "Animal rights activists", "Horse trainers"
+                if any(exc in cat for exc in ["activist", "trainer", "owner", "breeder", "rider"]):
+                    continue
+                is_excluded = True
+                break
+        
+        if is_excluded:
+            return False
+
+        # 2. Positive Filters (Must match at least one)
+        for cat in categories:
+            # Check direct keyword matches
+            for keyword in PERSON_POSITIVE_KEYWORDS:
+                if keyword in cat:
+                    is_human = True
+                    break
+            
+            if is_human:
+                break
+            
+            # Check for Year Births/Deaths (e.g., "Category:1946 births")
+            if re.search(r'\d{4} births', cat) and "animal" not in cat:
+                is_human = True
+                break
+            if re.search(r'\d{4} deaths', cat) and "animal" not in cat:
+                is_human = True
+                break
+            
+            # Check for century-based categories (e.g., "12th-century Mongol rulers")
+            if re.search(r'\d{1,2}(st|nd|rd|th)-century', cat):
+                # Likely historical figure if century-based
+                if any(role in cat for role in ["rulers", "people", "monarchs", "leaders", "generals"]):
+                    is_human = True
+                    break
+        
+        return is_human
 
     async def get_page_data(self, title: str) -> Tuple[str, List[str]]:
-        # Check cache
+        """Fetch page extract and links with caching."""
+        global _page_cache
+        
         if title in _page_cache:
             return _page_cache[title]
         
@@ -364,7 +494,6 @@ class BidirectionalLevelBasedSearch:
         }
         
         try:
-            # Fetch Text and Links
             params_text = {
                 "action": "query", "format": "json", "titles": title, 
                 "prop": "extracts", "explaintext": 1, "exintro": 1
@@ -383,9 +512,10 @@ class BidirectionalLevelBasedSearch:
             data_text = resp_text.json()
             pages = data_text.get("query", {}).get("pages", {})
             text = ""
-            for _, p in pages.items(): text = p.get("extract", "")
+            for _, p in pages.items():
+                text = p.get("extract", "")
             
-            # Parse Links
+            # Parse Links (with pagination)
             data_links = resp_links.json()
             links = []
             while True:
@@ -398,21 +528,29 @@ class BidirectionalLevelBasedSearch:
                     params_links.update(cont)
                     resp_links = await self.client.get(API_URL, params=params_links, headers=headers)
                     data_links = resp_links.json()
-                    if len(links) > 2000: break # Safety limit
+                    if len(links) > 2000:
+                        break  # Safety limit
                 else:
                     break
             
             result = (text, links)
             _page_cache[title] = result
             return result
+            
         except Exception as e:
-            print(f"API Error (Forward) {title}: {e}")
+            print(f"[API] Error (Forward) {title}: {e}")
             return "", []
 
     async def get_backlinks(self, title: str) -> List[str]:
-        # We can cache backlinks too if we want, but let's keep it simple for now or use same cache?
-        # Backlinks are different from forward links. Let's not mix in _page_cache unless we use a key prefix.
-        # For now, no cache for backlinks to save memory/complexity.
+        """
+        Fetch backlinks with CACHING.
+        OPTIMIZATION: Cache backlinks to avoid redundant fetches for popular targets.
+        """
+        global _backlink_cache
+        
+        # Check cache
+        if title in _backlink_cache:
+            return _backlink_cache[title]
         
         headers = {
             "User-Agent": "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"
@@ -438,30 +576,42 @@ class BidirectionalLevelBasedSearch:
                     params.update(cont)
                     resp = await self.client.get(API_URL, params=params, headers=headers)
                     data = resp.json()
-                    if len(backlinks) > 2000: break
+                    if len(backlinks) > 2000:
+                        break
                 else:
                     break
             
+            # Cache the result
+            _backlink_cache[title] = backlinks
             return backlinks
+            
         except Exception as e:
-            print(f"API Error (Backward) {title}: {e}")
+            print(f"[API] Error (Backward) {title}: {e}")
             return []
 
     def heuristic_filter(self, candidates: List[str]) -> List[str]:
+        """Filter out Wikipedia meta-pages and obvious non-person articles."""
         filtered = []
-        # Keywords to exclude (Wikipedia meta-pages and generic lists)
+        
         exclude_keywords = [
             "list of", "category:", "template:", "portal:", "help:", "wikipedia:", "file:",
             "user:", "talk:", "special:", "mediawiki:", "draft:", "timedtext:", "module:",
-            "disambiguation"
+            "disambiguation", "timeline of", "history of", "geography of", "culture of",
+            "economy of", "politics of", "government of", "military of",
         ]
         
         for c in candidates:
             c_lower = c.lower()
-            # Basic filters
-            if c[0].isdigit(): continue # Years/Dates
-            if c.startswith("List of"): continue
             
+            # Skip years/dates
+            if c[0].isdigit():
+                continue
+            
+            # Skip "List of..." articles
+            if c.startswith("List of"):
+                continue
+            
+            # Check exclusion keywords
             is_excluded = False
             for k in exclude_keywords:
                 if k in c_lower:
@@ -473,10 +623,13 @@ class BidirectionalLevelBasedSearch:
                 
         return filtered
 
-# Wrapper for main.py
+
+# Wrapper for main.py (streaming interface)
 async def find_shortest_path(start_page: str, end_page: str):
-    limits = httpx.Limits(max_keepalive_connections=20, max_connections=40)
-    async with httpx.AsyncClient(limits=limits, timeout=30.0) as client:
-        searcher = BidirectionalLevelBasedSearch(start_page, end_page, client)
-        async for msg in searcher.search():
-            yield msg
+    """
+    Main entry point for the BFS search.
+    Yields JSON messages for streaming to frontend.
+    """
+    searcher = BidirectionalLevelBasedSearch()
+    async for msg in searcher.search(start_page, end_page):
+        yield msg
