@@ -8,8 +8,9 @@ Key Optimizations:
 1. Bidirectional Search: O(b^(d/2)) instead of O(b^d) complexity
 2. Category Caching: Eliminates redundant Wikipedia API calls
 3. Parent-Pointer Path Reconstruction: ~8x memory reduction
-4. Historical Figure Detection: Supports ancient personalities (emperors, khans, etc.)
-5. Robust Exception Handling: Single API failure doesn't crash the search
+4. Smart Pagination: Early exit when enough human candidates found
+5. VIP Fast Lane: Instant verification for famous hub nodes
+6. Historical Figure Detection: Supports ancient personalities
 
 Author: capkimkhanh2k5
 License: MIT
@@ -27,7 +28,10 @@ from typing import Dict, List, Optional, Tuple, AsyncGenerator
 
 import httpx
 
-# Configure logging (disable httpx verbose output)
+# =============================================================================
+# LOGGING CONFIGURATION
+# =============================================================================
+
 logging.basicConfig(
     level=logging.INFO,
     format='[%(levelname)s] %(message)s'
@@ -46,15 +50,18 @@ WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 USER_AGENT = "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"
 
 # Search constraints (tuned for performance)
-TIMEOUT_SECONDS = 60
-MAX_NODES_VISITED = 2000
-MAX_LINKS_PER_PAGE = 500  # Reduced from 2000 for faster API calls
+TIMEOUT_SECONDS = 45
+MAX_NODES_VISITED = 3000
 BATCH_SIZE = 20
 CATEGORY_BATCH_SIZE = 10
-MAX_CANDIDATES_TO_CHECK = 300  # Reduced from 500 for faster category checks  
+MAX_CANDIDATES_TO_CHECK = 300
 MAX_DEGREE = 30
 MAX_STEP_COUNT = 100
 CONCURRENT_REQUESTS = 20
+
+# Smart Pagination settings
+MIN_HUMANS_FOR_EARLY_EXIT = 30  # Stop fetching when we have enough humans
+MAX_FETCH_BATCHES = 3  # Max pagination batches (3 x 500 = 1500 links max)
 
 # Cache file paths
 CACHE_FILE = "wiki_cache.json"
@@ -97,10 +104,14 @@ PERSON_NEGATIVE_KEYWORDS = [
     # Events & Polities
     "event", "battle", "war", "treaty", "conference",
     "dynasty", "empire", "kingdom",
+    # Tech/Gadget noise (NEW - prevents stuck on tech articles)
+    "(pda)", "(software)", "computer", "device", "vehicle", "ship", 
+    "aircraft", "product", "series", "video game", "programming",
+    "operating system", "technology", "software", "hardware",
 ]
 
 # Exceptions: categories containing these words are about humans despite negative keywords
-PERSON_EXCEPTION_KEYWORDS = ["activist", "trainer", "owner", "breeder", "rider"]
+PERSON_EXCEPTION_KEYWORDS = ["activist", "trainer", "owner", "breeder", "rider", "engineer", "developer"]
 
 # Wikipedia meta-page patterns to filter out
 META_PAGE_PATTERNS = [
@@ -108,13 +119,13 @@ META_PAGE_PATTERNS = [
     "user:", "talk:", "special:", "mediawiki:", "draft:", "timedtext:", "module:",
     "disambiguation", "timeline of", "history of", "geography of", "culture of",
     "economy of", "politics of", "government of", "military of",
+    # Tech article patterns
+    "(software)", "(operating system)", "(programming", "(computer",
 ]
 
 # =============================================================================
 # VIP FAST LANE - Famous Hub Nodes (0ms verification)
 # =============================================================================
-# These are well-known historical and modern figures that serve as "bridge nodes"
-# in the Wikipedia graph. By pre-verifying them, we skip API calls for common hubs.
 
 VIP_ALLOWLIST = {
     # Modern World Leaders
@@ -144,7 +155,7 @@ VIP_ALLOWLIST = {
     "Plato", "Socrates", "Archimedes", "Alan Turing", "Richard Feynman",
     
     # Entertainment & Culture
-    "Michael Jackson", "Elvis Presley", "The Beatles", "Madonna", "Taylor Swift",
+    "Michael Jackson", "Elvis Presley", "Madonna", "Taylor Swift",
     "Beyoncé", "Lady Gaga", "Kanye West", "Drake", "Rihanna",
     "Leonardo DiCaprio", "Tom Hanks", "Meryl Streep", "Brad Pitt", "Angelina Jolie",
     "Johnny Depp", "Will Smith", "Dwayne Johnson", "Marilyn Monroe", "Audrey Hepburn",
@@ -171,24 +182,24 @@ def load_cache() -> None:
     """Load all caches from disk on module initialization."""
     global _page_cache, _category_cache, _backlink_cache
     
-    for cache_file, cache_dict, name in [
-        (CACHE_FILE, "_page_cache", "page"),
-        (CATEGORY_CACHE_FILE, "_category_cache", "category"),
-        (BACKLINK_CACHE_FILE, "_backlink_cache", "backlink"),
+    for cache_file, cache_name in [
+        (CACHE_FILE, "page"),
+        (CATEGORY_CACHE_FILE, "category"),
+        (BACKLINK_CACHE_FILE, "backlink"),
     ]:
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, 'r', encoding='utf-8') as f:
                     loaded = json.load(f)
-                    if cache_dict == "_page_cache":
-                        _page_cache = loaded
-                    elif cache_dict == "_category_cache":
-                        _category_cache = loaded
-                    elif cache_dict == "_backlink_cache":
-                        _backlink_cache = loaded
-                    logger.info(f"Loaded {len(loaded)} {name} cache entries")
+                    if cache_name == "page":
+                        _page_cache.update(loaded)
+                    elif cache_name == "category":
+                        _category_cache.update(loaded)
+                    elif cache_name == "backlink":
+                        _backlink_cache.update(loaded)
+                    logger.info(f"Loaded {len(loaded)} {cache_name} cache entries")
             except Exception as e:
-                logger.warning(f"Failed to load {name} cache: {e}")
+                logger.warning(f"Failed to load {cache_name} cache: {e}")
 
 
 def save_cache() -> None:
@@ -217,32 +228,13 @@ class BidirectionalBFS:
     """
     Bidirectional Breadth-First Search for finding shortest paths between
     Wikipedia articles, restricted to human entities only.
-    
-    This implementation uses several optimizations:
-    
-    1. **Bidirectional Search**: Searches from both start and end simultaneously,
-       reducing complexity from O(b^d) to O(b^(d/2)) where b is branching factor
-       and d is path depth.
-    
-    2. **Parent-Pointer Path Reconstruction**: Instead of storing full paths for
-       each visited node (O(n*d) memory), we store only parent pointers (O(n))
-       and reconstruct paths on demand. ~8x memory reduction for deep searches.
-    
-    3. **Category Caching**: Wikipedia category lookups are cached to avoid
-       redundant API calls. Reduces API calls by 90%+ for super-nodes.
-    
-    4. **Historical Figure Detection**: Expanded keyword set to correctly identify
-       ancient personalities (emperors, khans, generals) as humans.
-    
-    5. **Robust Exception Handling**: Individual API failures don't crash the
-       entire search; failed nodes are gracefully skipped.
     """
     
     def __init__(self):
         self.client: Optional[httpx.AsyncClient] = None
         self.semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)
         
-        # Search state (initialized per search)
+        # Search state
         self.start_page: Optional[str] = None
         self.end_page: Optional[str] = None
         self.queue_f: Optional[deque] = None
@@ -257,27 +249,12 @@ class BidirectionalBFS:
         parent_map: Dict[str, Optional[str]], 
         reverse: bool = False
     ) -> List[str]:
-        """
-        Reconstruct path from parent pointers.
-        
-        This is a key optimization: instead of storing full paths for every
-        visited node (memory-intensive), we store only parent pointers and
-        reconstruct the path when needed.
-        
-        Args:
-            node: The node to start reconstruction from
-            parent_map: Dictionary mapping child -> parent
-            reverse: If True, return path in reverse order
-            
-        Returns:
-            List of nodes forming the path from root to node (or reverse)
-        """
+        """Reconstruct path from parent pointers."""
         path = []
         current = node
         while current is not None:
             path.append(current)
             current = parent_map.get(current)
-        
         return path if reverse else path[::-1]
 
     async def search(
@@ -287,20 +264,7 @@ class BidirectionalBFS:
     ) -> AsyncGenerator[str, None]:
         """
         Execute bidirectional BFS search.
-        
-        Yields JSON status messages for real-time progress updates:
-        - {"status": "info", "message": "..."} - Initialization info
-        - {"status": "exploring", ...} - Current exploration status
-        - {"status": "finished", "path": [...]} - Path found
-        - {"status": "error", "message": "..."} - Timeout/limit exceeded
-        - {"status": "not_found", ...} - No path exists
-        
-        Args:
-            start_node: Wikipedia article title to start from
-            end_node: Wikipedia article title to reach
-            
-        Yields:
-            JSON-encoded status messages
+        Yields JSON status messages for real-time progress updates.
         """
         self.start_page = start_node
         self.end_page = end_node
@@ -316,13 +280,13 @@ class BidirectionalBFS:
         
         self.step_count = 0
         
-        # Configure HTTP client with connection pooling
+        # Configure HTTP client
         limits = httpx.Limits(
             max_keepalive_connections=CONCURRENT_REQUESTS,
             max_connections=CONCURRENT_REQUESTS + 10
         )
         
-        async with httpx.AsyncClient(limits=limits, timeout=10.0) as client:
+        async with httpx.AsyncClient(limits=limits, timeout=15.0) as client:
             self.client = client
             
             yield json.dumps({
@@ -333,7 +297,7 @@ class BidirectionalBFS:
             while self.queue_f and self.queue_b:
                 elapsed = time.time() - start_time
                 
-                # Safety check: timeout
+                # Safety: timeout
                 if elapsed > TIMEOUT_SECONDS:
                     save_cache()
                     yield json.dumps({
@@ -342,7 +306,7 @@ class BidirectionalBFS:
                     })
                     return
 
-                # Safety check: max nodes
+                # Safety: max nodes
                 total_visited = len(self.parent_f) + len(self.parent_b)
                 if total_visited > MAX_NODES_VISITED:
                     save_cache()
@@ -354,7 +318,7 @@ class BidirectionalBFS:
 
                 self.step_count += 1
                 
-                # Expand the smaller frontier (key BFS optimization)
+                # Expand smaller frontier
                 if len(self.queue_f) <= len(self.queue_b):
                     direction = "forward"
                     queue = self.queue_f
@@ -366,12 +330,12 @@ class BidirectionalBFS:
                     parent_own = self.parent_b
                     parent_other = self.parent_f
 
-                # Process nodes in batches for concurrency
+                # Process nodes in batches
                 level_nodes = []
                 for _ in range(min(len(queue), BATCH_SIZE)):
                     level_nodes.append(queue.popleft())
                 
-                # Emit progress update
+                # Emit progress
                 yield json.dumps({
                     "status": "exploring",
                     "direction": direction,
@@ -405,7 +369,7 @@ class BidirectionalBFS:
                         parent_own[child] = current_node
                         queue.append(child)
                         
-                        # Check for intersection (path found!)
+                        # Check for intersection
                         if child in parent_other:
                             path_f = self._reconstruct_path(child, self.parent_f)
                             path_b = self._reconstruct_path(child, self.parent_b, reverse=True)
@@ -415,7 +379,7 @@ class BidirectionalBFS:
                             yield json.dumps({"status": "finished", "path": full_path})
                             return
 
-                # Depth limit check
+                # Depth limit
                 if self.step_count > MAX_STEP_COUNT:
                     save_cache()
                     yield json.dumps({
@@ -432,38 +396,22 @@ class BidirectionalBFS:
         current_node: str, 
         direction: str
     ) -> Optional[Dict]:
-        """
-        Process a single node: fetch links and filter to humans only.
-        
-        Pipeline:
-        1. Fetch all Wikipedia links (forward) or backlinks (backward)
-        2. Apply heuristic filter (remove meta-pages, dates, etc.)
-        3. Shuffle to avoid alphabetical bias
-        4. Check Wikipedia categories to verify human entities
-        5. Return top MAX_DEGREE candidates
-        
-        Args:
-            current_node: Wikipedia article title to process
-            direction: "forward" (outgoing links) or "backward" (backlinks)
-            
-        Returns:
-            Dict with "node" and "children" keys, or None on error
-        """
+        """Process a single node: fetch links and filter to humans only."""
         async with self.semaphore:
             try:
-                # Step 1: Fetch candidates
+                # Fetch candidates
                 if direction == "forward":
                     _, candidates = await self._get_page_data(current_node)
                 else:
                     candidates = await self._get_backlinks(current_node)
 
-                # Step 2: Heuristic filter
+                # Heuristic filter
                 filtered = self._heuristic_filter(candidates)
                 
-                # Step 3: Shuffle to avoid bias
+                # Shuffle to avoid bias
                 random.shuffle(filtered)
                 
-                # Step 4: Category-based person check
+                # Category-based person check
                 candidates_to_check = filtered[:MAX_CANDIDATES_TO_CHECK]
                 humans = await self._batch_check_categories(candidates_to_check)
                 
@@ -472,7 +420,6 @@ class BidirectionalBFS:
                     f"{len(candidates)} → {len(filtered)} → {len(humans)} humans"
                 )
 
-                # Step 5: Limit to MAX_DEGREE
                 return {
                     "node": current_node,
                     "children": humans[:MAX_DEGREE],
@@ -485,61 +432,39 @@ class BidirectionalBFS:
     async def _batch_check_categories(self, titles: List[str]) -> List[str]:
         """
         Check if Wikipedia articles are about humans using category analysis.
-        
-        Optimization Pipeline:
-        1. VIP Fast Lane: Instant verification for famous hub nodes (0ms)
-        2. Cache Check: Return cached results without API call
-        3. API Check: Batch query Wikipedia for uncached titles
-        
-        For super-nodes like "Genghis Khan" with 500+ links, this reduces
-        API calls by 90%+ through caching and VIP pre-verification.
-        
-        Args:
-            titles: List of Wikipedia article titles to check
-            
-        Returns:
-            List of titles confirmed to be about humans
+        Uses VIP fast lane + caching + API for maximum speed.
         """
         global _category_cache
         
         if not titles:
             return []
         
-        # =================================================================
-        # OPTIMIZATION 1: VIP Fast Lane (0ms latency for famous people)
-        # =================================================================
+        # OPTIMIZATION 1: VIP Fast Lane (0ms)
         vip_humans = [t for t in titles if t in VIP_ALLOWLIST]
-        remaining_titles = [t for t in titles if t not in VIP_ALLOWLIST]
+        remaining = [t for t in titles if t not in VIP_ALLOWLIST]
         
-        # =================================================================
         # OPTIMIZATION 2: Cache Check
-        # =================================================================
         cached_humans = []
         uncached = []
         
-        for title in remaining_titles:  # Use remaining (non-VIP) titles
+        for title in remaining:
             if title in _category_cache:
                 if _category_cache[title]:
                     cached_humans.append(title)
             else:
                 uncached.append(title)
         
-        # If all remaining are cached, return VIP + cached
         if not uncached:
             return vip_humans + cached_humans
         
-        # =================================================================
-        # OPTIMIZATION 3: Batch API Check for uncached titles
-        # =================================================================
+        # OPTIMIZATION 3: Batch API Check
         batches = [
             uncached[i:i + CATEGORY_BATCH_SIZE] 
             for i in range(0, len(uncached), CATEGORY_BATCH_SIZE)
         ]
         
         async def check_batch(batch: List[str]) -> List[str]:
-            """Check a single batch of titles."""
             humans = []
-            
             params = {
                 "action": "query",
                 "format": "json",
@@ -553,13 +478,10 @@ class BidirectionalBFS:
             try:
                 async with self.semaphore:
                     resp = await self.client.get(
-                        WIKIPEDIA_API_URL, 
-                        params=params, 
-                        headers=headers
+                        WIKIPEDIA_API_URL, params=params, headers=headers
                     )
                 
                 if resp.status_code != 200:
-                    logger.warning(f"API returned {resp.status_code}")
                     return []
                 
                 data = resp.json()
@@ -567,19 +489,12 @@ class BidirectionalBFS:
                 
                 for page in pages.values():
                     title = page.get("title")
-                    
                     if "missing" in page:
                         _category_cache[title] = False
                         continue
                     
-                    categories = [
-                        c["title"].lower() 
-                        for c in page.get("categories", [])
-                    ]
-                    clean_cats = [
-                        c[9:] if c.startswith("category:") else c 
-                        for c in categories
-                    ]
+                    categories = [c["title"].lower() for c in page.get("categories", [])]
+                    clean_cats = [c[9:] if c.startswith("category:") else c for c in categories]
                     
                     is_human = self._is_human(categories, clean_cats)
                     _category_cache[title] = is_human
@@ -592,59 +507,33 @@ class BidirectionalBFS:
             
             return humans
 
-        # Run all batches concurrently
         tasks = [check_batch(batch) for batch in batches]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         human_titles = []
         for result in results:
             if isinstance(result, Exception):
-                logger.error(f"Batch failed: {result}")
                 continue
             human_titles.extend(result)
         
-        # Return: VIP (instant) + Cached + API-verified
         return vip_humans + cached_humans + human_titles
 
-    def _is_human(
-        self, 
-        categories: List[str], 
-        clean_categories: List[str]
-    ) -> bool:
-        """
-        Determine if an article is about a human based on categories.
-        
-        Uses a two-stage filter:
-        1. Negative filter: Exclude animals, fictional characters, places, etc.
-        2. Positive filter: Must match at least one human indicator
-        
-        Args:
-            categories: Raw category names (with "Category:" prefix)
-            clean_categories: Category names without prefix
-            
-        Returns:
-            True if the article is about a human
-        """
-        # Stage 1: Negative filter
+    def _is_human(self, categories: List[str], clean_categories: List[str]) -> bool:
+        """Determine if an article is about a human based on categories."""
+        # Negative filter
         for cat in clean_categories:
             if any(neg in cat for neg in PERSON_NEGATIVE_KEYWORDS):
-                # Allow exceptions (e.g., "Horse trainer" is a human)
                 if not any(exc in cat for exc in PERSON_EXCEPTION_KEYWORDS):
                     return False
         
-        # Stage 2: Positive filter
+        # Positive filter
         for cat in categories:
-            # Check keyword matches
             if any(kw in cat for kw in PERSON_POSITIVE_KEYWORDS):
                 return True
-            
-            # Check birth/death year patterns (e.g., "1946 births")
             if re.search(r'\d{4} births', cat) and "animal" not in cat:
                 return True
             if re.search(r'\d{4} deaths', cat) and "animal" not in cat:
                 return True
-            
-            # Check century-based categories (e.g., "12th-century monarchs")
             if re.search(r'\d{1,2}(st|nd|rd|th)-century', cat):
                 if any(role in cat for role in ["rulers", "people", "monarchs", "leaders", "generals"]):
                     return True
@@ -653,13 +542,10 @@ class BidirectionalBFS:
 
     async def _get_page_data(self, title: str) -> Tuple[str, List[str]]:
         """
-        Fetch page extract and outgoing links with caching.
+        Fetch page extract and links with SMART PAGINATION.
         
-        Args:
-            title: Wikipedia article title
-            
-        Returns:
-            Tuple of (extract_text, list_of_links)
+        Uses early exit: stops fetching when >= 30 potential humans found.
+        Limits to max 3 batches (1500 links) to prevent infinite loading.
         """
         global _page_cache
         
@@ -669,35 +555,58 @@ class BidirectionalBFS:
         headers = {"User-Agent": USER_AGENT}
         
         try:
-            # Fetch extract and links concurrently
-            # OPTIMIZATION: Use pllimit=200 instead of "max" to avoid pagination
+            # Fetch extract
             params_text = {
                 "action": "query", "format": "json", "titles": title,
                 "prop": "extracts", "explaintext": 1, "exintro": 1
             }
-            params_links = {
-                "action": "query", "format": "json", "titles": title,
-                "prop": "links", "plnamespace": 0, "pllimit": 200  # Fixed limit
-            }
+            resp_text = await self.client.get(WIKIPEDIA_API_URL, params=params_text, headers=headers)
             
-            resp_text, resp_links = await asyncio.gather(
-                self.client.get(WIKIPEDIA_API_URL, params=params_text, headers=headers),
-                self.client.get(WIKIPEDIA_API_URL, params=params_links, headers=headers)
-            )
-            
-            # Parse extract
             text = ""
             for page in resp_text.json().get("query", {}).get("pages", {}).values():
                 text = page.get("extract", "")
             
-            # Parse links - NO PAGINATION for speed
-            links = []
-            data_links = resp_links.json()
-            for page in data_links.get("query", {}).get("pages", {}).values():
-                if "links" in page:
-                    links = [link["title"] for link in page["links"]]
+            # SMART PAGINATION for links
+            params_links = {
+                "action": "query", "format": "json", "titles": title,
+                "prop": "links", "plnamespace": 0, "pllimit": "max"
+            }
             
-            result = (text, links)
+            all_links = []
+            potential_humans = 0
+            batch_count = 0
+            
+            while batch_count < MAX_FETCH_BATCHES:
+                batch_count += 1
+                
+                resp_links = await self.client.get(
+                    WIKIPEDIA_API_URL, params=params_links, headers=headers
+                )
+                data = resp_links.json()
+                
+                # Extract links from this batch
+                new_links = []
+                for page in data.get("query", {}).get("pages", {}).values():
+                    if "links" in page:
+                        new_links = [link["title"] for link in page["links"]]
+                
+                all_links.extend(new_links)
+                
+                # Check how many potential humans we have (quick heuristic filter)
+                filtered = self._heuristic_filter(new_links)
+                potential_humans += len(filtered)
+                
+                # EARLY EXIT: Stop if we have enough potential humans
+                if potential_humans >= MIN_HUMANS_FOR_EARLY_EXIT:
+                    break
+                
+                # Check if more pages available
+                if "continue" not in data:
+                    break
+                
+                params_links.update(data["continue"])
+            
+            result = (text, all_links)
             _page_cache[title] = result
             return result
             
@@ -707,16 +616,8 @@ class BidirectionalBFS:
 
     async def _get_backlinks(self, title: str) -> List[str]:
         """
-        Fetch backlinks (pages linking TO this article) with caching.
-        
-        OPTIMIZATION: Fetches only first batch (100 backlinks) without pagination.
-        This dramatically speeds up searches for popular figures.
-        
-        Args:
-            title: Wikipedia article title
-            
-        Returns:
-            List of article titles that link to this page
+        Fetch backlinks with caching.
+        Uses max limit (500) but NO pagination for speed.
         """
         global _backlink_cache
         
@@ -726,23 +627,19 @@ class BidirectionalBFS:
         headers = {"User-Agent": USER_AGENT}
         
         try:
-            # OPTIMIZATION: Use bllimit=100 instead of "max" to avoid pagination
             params = {
                 "action": "query", "format": "json",
                 "list": "backlinks", "bltitle": title,
-                "blnamespace": 0, "bllimit": 100  # Fixed limit, no pagination
+                "blnamespace": 0, "bllimit": "max"  # max = 500, single batch
             }
             
-            resp = await self.client.get(
-                WIKIPEDIA_API_URL, params=params, headers=headers
-            )
+            resp = await self.client.get(WIKIPEDIA_API_URL, params=params, headers=headers)
             data = resp.json()
             
             backlinks = []
             if "backlinks" in data.get("query", {}):
                 backlinks = [bl["title"] for bl in data["query"]["backlinks"]]
             
-            # NO PAGINATION - just use the first batch for speed
             _backlink_cache[title] = backlinks
             return backlinks
             
@@ -753,32 +650,24 @@ class BidirectionalBFS:
     def _heuristic_filter(self, candidates: List[str]) -> List[str]:
         """
         Quick filter to remove obvious non-person articles.
-        
-        Removes:
-        - Wikipedia meta-pages (Categories, Templates, Lists, etc.)
-        - Year/date articles
-        - Geographic/historical topic pages
-        
-        Args:
-            candidates: List of Wikipedia article titles
-            
-        Returns:
-            Filtered list of potential person articles
         """
         filtered = []
         
         for candidate in candidates:
+            if not candidate:
+                continue
+                
             lower = candidate.lower()
             
             # Skip years/dates
-            if candidate and candidate[0].isdigit():
+            if candidate[0].isdigit():
                 continue
             
             # Skip "List of..." articles
             if candidate.startswith("List of"):
                 continue
             
-            # Skip meta-pages
+            # Skip meta-pages and tech articles
             if any(pattern in lower for pattern in META_PAGE_PATTERNS):
                 continue
             
@@ -791,27 +680,10 @@ class BidirectionalBFS:
 # PUBLIC API
 # =============================================================================
 
-async def find_shortest_path(
-    start_page: str, 
-    end_page: str
-) -> AsyncGenerator[str, None]:
+async def find_shortest_path(start_page: str, end_page: str) -> AsyncGenerator[str, None]:
     """
     Main entry point for pathfinding.
-    
     Streams JSON status messages for real-time progress updates.
-    
-    Args:
-        start_page: Wikipedia article title to start from
-        end_page: Wikipedia article title to find
-        
-    Yields:
-        JSON-encoded status messages
-        
-    Example:
-        async for message in find_shortest_path("Albert Einstein", "Elon Musk"):
-            data = json.loads(message)
-            if data["status"] == "finished":
-                print(f"Path: {data['path']}")
     """
     searcher = BidirectionalBFS()
     async for msg in searcher.search(start_page, end_page):
