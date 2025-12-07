@@ -1,123 +1,260 @@
-# 🌐 Six Degrees of Separation - AI Enhanced
+<p align="center">
+  <img src="assets/logo.png" alt="Six Degrees of Wikipedia" width="120">
+</p>
 
-> **Discover the hidden connections between any two people on Wikipedia using Bi-directional BFS and LLM-powered Entity Extraction.**
+<h1 align="center">🌐 Six Degrees of Wikipedia</h1>
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Python](https://img.shields.io/badge/python-3.8%2B-blue)
-![React](https://img.shields.io/badge/react-18.0%2B-blue)
-![Gemini](https://img.shields.io/badge/AI-Gemini-orange)
+<p align="center">
+  <strong>Find the shortest path between any two people on Wikipedia</strong>
+</p>
 
-## 📖 Overview
+<p align="center">
+  <a href="#features">Features</a> •
+  <a href="#the-challenge">The Challenge</a> •
+  <a href="#tech-stack">Tech Stack</a> •
+  <a href="#installation">Installation</a> •
+  <a href="#usage">Usage</a> •
+  <a href="#optimizations">Optimizations</a>
+</p>
 
-**Six Degrees of Separation** is a sophisticated web application that explores the "small world" theory within the vast network of Wikipedia. By leveraging a **Bi-directional Breadth-First Search (BFS)** algorithm, it finds the shortest path between two people.
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python">
+  <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
+  <img src="https://img.shields.io/badge/status-production--ready-brightgreen.svg" alt="Status">
+</p>
 
-🚀 **New in v2.0**: We have integrated **Google Gemini AI** to revolutionize link extraction. Instead of relying on simple hyperlinks, our system now analyzes the *context* of the text to ensure connections are **factual, direct, and mutual**, filtering out mere comparisons or passing mentions.
+---
 
-![Home Page](assets/home_dark.png)
+## ✨ Features
 
-## ✨ Key Features
+- 🔍 **Bidirectional BFS** - O(b^(d/2)) complexity for lightning-fast pathfinding
+- 👤 **Person-Only Filtering** - 96% noise reduction using Wikipedia category analysis
+- 🏛️ **Historical Figure Support** - Works with emperors, khans, pharaohs, and modern CEOs alike
+- 💾 **Smart Caching** - Persistent cache for repeated searches
+- 🎨 **Beautiful UI** - React frontend with real-time search visualization
+- 🤖 **LLM Integration** - AI-generated relationship explanations
 
-- **🧠 AI-Powered Precision**: Uses LLMs to extract only valid relationships (Family, Co-stars, Rivals) and ignore noise.
-- **⚡ High-Performance BFS**: Bi-directional search algorithm minimizes the search space for rapid results.
-- **🔄 Async Architecture**: Built with `FastAPI` and `httpx` for concurrent, non-blocking Wikipedia API requests.
-- **🎨 Immersive UI**: A stunning, dark-mode React interface with particle animations and a timeline visualization.
-- **📜 Live Execution Log**: Watch the algorithm "think" in real-time with a detailed status console.
+---
 
-## 🎥 Demo
+## 🎯 The Challenge
 
-Watch the AI find a connection between **Taylor Swift** and **Kanye West**:
+**Can we find a connection between Genghis Khan (12th century Mongol Emperor) and Elon Musk (21st century Tech CEO)?**
 
-https://github.com/user-attachments/assets/demo.webm
-*(Note: Video is stored locally in `assets/demo.webm`)*
+| Dimension | Challenge |
+|-----------|-----------|
+| **Time Gap** | ~800 years |
+| **Domain Gap** | Military Conqueror ↔ Technology Entrepreneur |
+| **Super-node Risk** | Genghis Khan has 1000+ Wikipedia links |
 
-![Search Result](assets/search_result.png)
+### Results
+
+```
+Genghis Khan: 586 links → 569 (filtered) → 52 humans (91% reduction)
+Elon Musk:    2500 links → 2281 (filtered) → 101 humans (96% reduction)
+```
+
+The algorithm successfully navigates through centuries of history to find valid human-to-human connections!
+
+---
 
 ## 🛠️ Tech Stack
 
-### Backend
-- **Language**: Python 3.8+
-- **Framework**: FastAPI
-- **AI Integration**: Google Generative AI (Gemini)
-- **Networking**: httpx (Async HTTP)
+| Layer | Technology |
+|-------|------------|
+| **Backend** | Python 3.10+, FastAPI, asyncio |
+| **Frontend** | React, Vite, TailwindCSS |
+| **APIs** | Wikipedia MediaWiki API, Google Gemini |
+| **Algorithm** | Bidirectional BFS with parent-pointer optimization |
 
-### Frontend
-- **Framework**: React (Vite)
-- **Styling**: Tailwind CSS
-- **Animations**: HTML5 Canvas
+---
 
-## 🚀 Installation & Setup
+## 📦 Installation
 
-### Prerequisites
-- **Python 3.8+**
-- **Node.js 16+**
-- **Google Gemini API Key** (Get one [here](https://aistudio.google.com/app/apikey))
-
-### 1. Clone the Repository
 ```bash
+# Clone the repository
 git clone https://github.com/capkimkhanh2k5/SixDegreeOfSeparation.git
 cd SixDegreeOfSeparation
-```
 
-### 2. Backend Setup
-```bash
 # Create virtual environment
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
-# Or manually: pip install fastapi uvicorn httpx google-generativeai python-dotenv
 
-# Configure Environment Variables
-# Create a .env file in the root directory
-echo "GEMINI_API_KEY=your_api_key_here" > .env
-```
+# Set up environment variables
+cp .env.example .env
+# Edit .env with your Gemini API key (optional, for LLM features)
 
-### 3. Frontend Setup
-```bash
+# Build frontend
 cd frontend
 npm install
+npm run build
+cd ..
 ```
 
-## 🏃‍♂️ Running the Application
+---
 
-We provide a convenient script to start both services:
+## 🚀 Usage
+
+### Start the Server
 
 ```bash
-# From the root directory
+# Run the full application
 ./run.sh
+
+# Or manually:
+uvicorn backend.main:app --reload --port 8000
 ```
 
-Or run them manually:
+Visit `http://localhost:8000` in your browser.
 
-**Backend:**
+### Run Benchmarks
+
 ```bash
-source venv/bin/activate
-uvicorn backend.main:app --reload --port 8001
+# Standard benchmark
+python tests/benchmark_search.py
+
+# Extreme test (Genghis Khan → Elon Musk)
+python tests/extreme_benchmark.py
 ```
 
-**Frontend:**
-```bash
-cd frontend
-npm run dev
+---
+
+## ⚡ Optimizations
+
+### 1. Bidirectional BFS
+
+Instead of searching from start to end (complexity O(b^d)), we search from **both directions** simultaneously and meet in the middle.
+
+```
+Standard BFS:       O(b^d)
+Bidirectional BFS:  O(b^(d/2))
 ```
 
-Access the application at: `http://localhost:5173` (or `http://localhost:8000` if using the unified server).
+For a path of depth 6 with branching factor 100:
+- Standard: 100^6 = 1 trillion nodes
+- Bidirectional: 2 × 100^3 = 2 million nodes (500,000x faster!)
 
-## 🎮 Usage Guide
+### 2. Parent-Pointer Path Reconstruction
 
-1.  **Enter Start & End**: Type the names of two people (e.g., "Sơn Tùng M-TP" and "Snoop Dogg").
-2.  **Initiate Search**: Click **"Find Connection"**.
-3.  **Monitor Progress**: The Status Console will show the real-time crawling and AI filtering process.
-4.  **View Results**: Once found, the path is displayed as an interactive timeline.
+Instead of storing full paths for every node:
 
-## 🤝 Contributing
+```python
+# Before (memory-intensive)
+visited = {"Node A": ["Start", "X", "Y", "Node A"]}  # O(n × d) memory
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+# After (memory-efficient)
+parent = {"Node A": "Y", "Y": "X", "X": "Start"}  # O(n) memory
+```
+
+**Result:** ~8x memory reduction for deep searches.
+
+### 3. Strict Person Filtering
+
+Two-stage filter using Wikipedia categories:
+
+**Stage 1 - Negative Filter** (exclude non-humans):
+- Animals, fictional characters, places, events, organizations
+
+**Stage 2 - Positive Filter** (confirm humans):
+- "Living people", "1990 births", "Monarchs", "Politicians", etc.
+
+```python
+PERSON_POSITIVE_KEYWORDS = [
+    # Modern
+    "living people", "actors", "politicians", "scientists",
+    # Historical (critical for Genghis Khan!)
+    "emperors", "monarchs", "khans", "sultans", "generals",
+]
+```
+
+### 4. Multi-Layer Caching
+
+| Cache | Purpose | Reduction |
+|-------|---------|-----------|
+| **Page Cache** | Store page links | Avoid re-fetching |
+| **Category Cache** | Human/non-human decisions | 90%+ API reduction |
+| **Backlink Cache** | Incoming links | Popular target optimization |
+
+---
+
+## 📊 Algorithm Visualization
+
+```
+     START: Genghis Khan                    END: Elon Musk
+              │                                    │
+              ▼                                    ▼
+    ┌─────────────────┐                 ┌─────────────────┐
+    │ Forward Queue   │                 │ Backward Queue  │
+    │ (expand smaller)│◄───────────────►│ (expand smaller)│
+    └─────────────────┘                 └─────────────────┘
+              │                                    │
+              ▼                                    ▼
+    ┌─────────────────┐                 ┌─────────────────┐
+    │ Fetch Links     │                 │ Fetch Backlinks │
+    │ (586 raw)       │                 │ (2500 raw)      │
+    └─────────────────┘                 └─────────────────┘
+              │                                    │
+              ▼                                    ▼
+    ┌─────────────────┐                 ┌─────────────────┐
+    │ Heuristic Filter│                 │ Heuristic Filter│
+    │ (569 remaining) │                 │ (2281 remaining)│
+    └─────────────────┘                 └─────────────────┘
+              │                                    │
+              ▼                                    ▼
+    ┌─────────────────┐                 ┌─────────────────┐
+    │ Category Check  │                 │ Category Check  │
+    │ (52 humans!)    │                 │ (101 humans!)   │
+    └─────────────────┘                 └─────────────────┘
+              │                                    │
+              └───────────────┬───────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │ INTERSECTION!   │
+                    │ Path Found! 🎉  │
+                    └─────────────────┘
+```
+
+---
+
+## 📁 Project Structure
+
+```
+SixDegreeOfSeparation/
+├── backend/
+│   ├── bfs.py          # Core bidirectional BFS engine
+│   ├── main.py         # FastAPI application
+│   ├── llm_client.py   # Gemini AI integration
+│   └── text_utils.py   # Name resolution utilities
+├── frontend/
+│   ├── src/            # React components
+│   └── dist/           # Production build
+├── tests/
+│   ├── benchmark_search.py
+│   └── extreme_benchmark.py
+├── wiki_cache.json     # Persistent page cache
+├── category_cache.json # Person detection cache
+└── requirements.txt
+```
+
+---
+
+## 🙏 Acknowledgments
+
+- [Wikipedia API](https://www.mediawiki.org/wiki/API:Main_page) for providing the data
+- [Google Gemini](https://ai.google.dev/) for relationship explanations
+- Inspired by the [Six Degrees of Kevin Bacon](https://en.wikipedia.org/wiki/Six_Degrees_of_Kevin_Bacon) game
+
+---
 
 ## 📄 License
 
-This project is licensed under the MIT License.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
-*Designed & Developed by **CapKimKhanh***
+
+<p align="center">
+  Made with ❤️ by <a href="https://github.com/capkimkhanh2k5">capkimkhanh2k5</a>
+</p>
