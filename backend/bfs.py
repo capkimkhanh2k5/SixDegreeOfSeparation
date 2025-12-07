@@ -27,12 +27,16 @@ from typing import Dict, List, Optional, Tuple, AsyncGenerator
 
 import httpx
 
-# Configure logging
+# Configure logging (disable httpx verbose output)
 logging.basicConfig(
     level=logging.INFO,
     format='[%(levelname)s] %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Disable httpx verbose HTTP request logging
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # =============================================================================
 # CONSTANTS
@@ -41,13 +45,13 @@ logger = logging.getLogger(__name__)
 WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 USER_AGENT = "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"
 
-# Search constraints
+# Search constraints (tuned for performance)
 TIMEOUT_SECONDS = 60
 MAX_NODES_VISITED = 2000
-MAX_LINKS_PER_PAGE = 2000
+MAX_LINKS_PER_PAGE = 500  # Reduced from 2000 for faster API calls
 BATCH_SIZE = 20
 CATEGORY_BATCH_SIZE = 10
-MAX_CANDIDATES_TO_CHECK = 500
+MAX_CANDIDATES_TO_CHECK = 300  # Reduced from 500 for faster category checks  
 MAX_DEGREE = 30
 MAX_STEP_COUNT = 100
 CONCURRENT_REQUESTS = 20
@@ -105,6 +109,54 @@ META_PAGE_PATTERNS = [
     "disambiguation", "timeline of", "history of", "geography of", "culture of",
     "economy of", "politics of", "government of", "military of",
 ]
+
+# =============================================================================
+# VIP FAST LANE - Famous Hub Nodes (0ms verification)
+# =============================================================================
+# These are well-known historical and modern figures that serve as "bridge nodes"
+# in the Wikipedia graph. By pre-verifying them, we skip API calls for common hubs.
+
+VIP_ALLOWLIST = {
+    # Modern World Leaders
+    "Donald Trump", "Joe Biden", "Barack Obama", "George W. Bush", "Bill Clinton",
+    "Hillary Clinton", "Vladimir Putin", "Xi Jinping", "Angela Merkel", "Emmanuel Macron",
+    "Boris Johnson", "Narendra Modi", "Shinzo Abe", "Justin Trudeau", "Benjamin Netanyahu",
+    
+    # Historical Leaders & Monarchs
+    "Genghis Khan", "Kublai Khan", "Alexander the Great", "Julius Caesar", "Augustus",
+    "Napoleon Bonaparte", "Adolf Hitler", "Joseph Stalin", "Winston Churchill", "Franklin D. Roosevelt",
+    "Queen Victoria", "Queen Elizabeth II", "King Charles III", "Henry VIII of England",
+    "Louis XIV", "Peter the Great", "Catherine the Great", "Cleopatra", "Ramesses II",
+    
+    # Revolutionary Figures
+    "George Washington", "Abraham Lincoln", "Thomas Jefferson", "Mahatma Gandhi",
+    "Nelson Mandela", "Martin Luther King Jr.", "Che Guevara", "Ho Chi Minh",
+    "Mao Zedong", "Vladimir Lenin", "Karl Marx", "Friedrich Engels",
+    
+    # Tech & Business Moguls
+    "Elon Musk", "Jeff Bezos", "Bill Gates", "Steve Jobs", "Mark Zuckerberg",
+    "Warren Buffett", "Larry Page", "Sergey Brin", "Tim Cook", "Satya Nadella",
+    "Jack Ma", "Richard Branson", "Oprah Winfrey",
+    
+    # Scientists & Inventors
+    "Albert Einstein", "Isaac Newton", "Stephen Hawking", "Nikola Tesla", "Thomas Edison",
+    "Marie Curie", "Charles Darwin", "Galileo Galilei", "Leonardo da Vinci", "Aristotle",
+    "Plato", "Socrates", "Archimedes", "Alan Turing", "Richard Feynman",
+    
+    # Entertainment & Culture
+    "Michael Jackson", "Elvis Presley", "The Beatles", "Madonna", "Taylor Swift",
+    "Beyoncé", "Lady Gaga", "Kanye West", "Drake", "Rihanna",
+    "Leonardo DiCaprio", "Tom Hanks", "Meryl Streep", "Brad Pitt", "Angelina Jolie",
+    "Johnny Depp", "Will Smith", "Dwayne Johnson", "Marilyn Monroe", "Audrey Hepburn",
+    
+    # Sports Legends
+    "Michael Jordan", "LeBron James", "Cristiano Ronaldo", "Lionel Messi", "Serena Williams",
+    "Roger Federer", "Muhammad Ali", "Mike Tyson", "Usain Bolt", "Tiger Woods",
+    
+    # Religious & Philosophical Figures
+    "Jesus", "Muhammad", "Buddha", "Pope Francis", "Dalai Lama",
+    "Confucius", "Moses", "Saint Paul", "Martin Luther",
+}
 
 # =============================================================================
 # CACHE MANAGEMENT
@@ -434,8 +486,13 @@ class BidirectionalBFS:
         """
         Check if Wikipedia articles are about humans using category analysis.
         
-        Uses caching to avoid redundant API calls. For super-nodes like
-        "Genghis Khan" with 500+ links, this reduces API calls by 90%+.
+        Optimization Pipeline:
+        1. VIP Fast Lane: Instant verification for famous hub nodes (0ms)
+        2. Cache Check: Return cached results without API call
+        3. API Check: Batch query Wikipedia for uncached titles
+        
+        For super-nodes like "Genghis Khan" with 500+ links, this reduces
+        API calls by 90%+ through caching and VIP pre-verification.
         
         Args:
             titles: List of Wikipedia article titles to check
@@ -448,21 +505,32 @@ class BidirectionalBFS:
         if not titles:
             return []
         
-        # Check cache first
+        # =================================================================
+        # OPTIMIZATION 1: VIP Fast Lane (0ms latency for famous people)
+        # =================================================================
+        vip_humans = [t for t in titles if t in VIP_ALLOWLIST]
+        remaining_titles = [t for t in titles if t not in VIP_ALLOWLIST]
+        
+        # =================================================================
+        # OPTIMIZATION 2: Cache Check
+        # =================================================================
         cached_humans = []
         uncached = []
         
-        for title in titles:
+        for title in remaining_titles:  # Use remaining (non-VIP) titles
             if title in _category_cache:
                 if _category_cache[title]:
                     cached_humans.append(title)
             else:
                 uncached.append(title)
         
+        # If all remaining are cached, return VIP + cached
         if not uncached:
-            return cached_humans
+            return vip_humans + cached_humans
         
-        # Batch uncached titles
+        # =================================================================
+        # OPTIMIZATION 3: Batch API Check for uncached titles
+        # =================================================================
         batches = [
             uncached[i:i + CATEGORY_BATCH_SIZE] 
             for i in range(0, len(uncached), CATEGORY_BATCH_SIZE)
@@ -535,7 +603,8 @@ class BidirectionalBFS:
                 continue
             human_titles.extend(result)
         
-        return cached_humans + human_titles
+        # Return: VIP (instant) + Cached + API-verified
+        return vip_humans + cached_humans + human_titles
 
     def _is_human(
         self, 
@@ -601,13 +670,14 @@ class BidirectionalBFS:
         
         try:
             # Fetch extract and links concurrently
+            # OPTIMIZATION: Use pllimit=200 instead of "max" to avoid pagination
             params_text = {
                 "action": "query", "format": "json", "titles": title,
                 "prop": "extracts", "explaintext": 1, "exintro": 1
             }
             params_links = {
                 "action": "query", "format": "json", "titles": title,
-                "prop": "links", "plnamespace": 0, "pllimit": "max"
+                "prop": "links", "plnamespace": 0, "pllimit": 200  # Fixed limit
             }
             
             resp_text, resp_links = await asyncio.gather(
@@ -620,23 +690,12 @@ class BidirectionalBFS:
             for page in resp_text.json().get("query", {}).get("pages", {}).values():
                 text = page.get("extract", "")
             
-            # Parse links with pagination
+            # Parse links - NO PAGINATION for speed
             links = []
             data_links = resp_links.json()
-            
-            while True:
-                for page in data_links.get("query", {}).get("pages", {}).values():
-                    if "links" in page:
-                        links.extend([link["title"] for link in page["links"]])
-                
-                if "continue" not in data_links or len(links) > MAX_LINKS_PER_PAGE:
-                    break
-                    
-                params_links.update(data_links["continue"])
-                resp_links = await self.client.get(
-                    WIKIPEDIA_API_URL, params=params_links, headers=headers
-                )
-                data_links = resp_links.json()
+            for page in data_links.get("query", {}).get("pages", {}).values():
+                if "links" in page:
+                    links = [link["title"] for link in page["links"]]
             
             result = (text, links)
             _page_cache[title] = result
@@ -649,6 +708,9 @@ class BidirectionalBFS:
     async def _get_backlinks(self, title: str) -> List[str]:
         """
         Fetch backlinks (pages linking TO this article) with caching.
+        
+        OPTIMIZATION: Fetches only first batch (100 backlinks) without pagination.
+        This dramatically speeds up searches for popular figures.
         
         Args:
             title: Wikipedia article title
@@ -664,33 +726,23 @@ class BidirectionalBFS:
         headers = {"User-Agent": USER_AGENT}
         
         try:
+            # OPTIMIZATION: Use bllimit=100 instead of "max" to avoid pagination
             params = {
                 "action": "query", "format": "json",
                 "list": "backlinks", "bltitle": title,
-                "blnamespace": 0, "bllimit": "max"
+                "blnamespace": 0, "bllimit": 100  # Fixed limit, no pagination
             }
             
-            backlinks = []
             resp = await self.client.get(
                 WIKIPEDIA_API_URL, params=params, headers=headers
             )
             data = resp.json()
             
-            while True:
-                if "backlinks" in data.get("query", {}):
-                    backlinks.extend([
-                        bl["title"] for bl in data["query"]["backlinks"]
-                    ])
-                
-                if "continue" not in data or len(backlinks) > MAX_LINKS_PER_PAGE:
-                    break
-                    
-                params.update(data["continue"])
-                resp = await self.client.get(
-                    WIKIPEDIA_API_URL, params=params, headers=headers
-                )
-                data = resp.json()
+            backlinks = []
+            if "backlinks" in data.get("query", {}):
+                backlinks = [bl["title"] for bl in data["query"]["backlinks"]]
             
+            # NO PAGINATION - just use the first batch for speed
             _backlink_cache[title] = backlinks
             return backlinks
             
