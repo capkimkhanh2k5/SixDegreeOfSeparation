@@ -12,6 +12,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [path, setPath] = useState(null);
   const [error, setError] = useState(null);
+  const [visitedCount, setVisitedCount] = useState(0);
   // Removed 'view' state as we now use conditional rendering based on data
 
   const handleSearch = () => {
@@ -20,6 +21,7 @@ function App() {
     setLoading(true);
     setPath(null);
     setError(null);
+    setVisitedCount(0);
 
     // Build WebSocket URL dynamically
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -44,7 +46,10 @@ function App() {
 
         switch (data.status) {
           case 'exploring':
-            // REAL-TIME UPDATE: Dispatch immediately to StatusConsole
+            // REAL-TIME UPDATE: Track visited count and dispatch to StatusConsole
+            if (data.stats?.visited) {
+              setVisitedCount(data.stats.visited);
+            }
             window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
             break;
 
@@ -125,6 +130,7 @@ function App() {
     setEndPage('');
     setPath(null);
     setError(null);
+    setVisitedCount(0);
   };
 
   return (
@@ -227,7 +233,7 @@ function App() {
 
             {/* Status Console (Always visible or conditional?) - User said "below is the table showing process" */}
             <div className="h-[300px]">
-              <StatusConsole loading={loading} />
+              <StatusConsole loading={loading} visitedCount={visitedCount} />
             </div>
 
             {error && (

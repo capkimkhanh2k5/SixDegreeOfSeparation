@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, memo } from 'react';
 
 // ============================================================================
 // HELPER: Parse incoming log data
@@ -20,22 +20,24 @@ const parseLogData = (data) => {
 // ============================================================================
 // HELPER: Parse backend log message
 // Pattern: "Name (direction): Total → Filtered → Humans humans"
-// Returns: { name, direction, visited } or null
+// Returns: { name, direction, total, filtered, humans } or null
 // ============================================================================
 const parseBackendLog = (rawMessage) => {
     if (!rawMessage || typeof rawMessage !== 'string') return null;
 
     // Robust regex: handles both → and -> arrows
     // "Carlo Rubbia (forward): 318 → 312 → 22 humans"
-    // "Carlo Rubbia (backward): 500 -> 490 -> 28 humans"
-    const regex = /^(.+?)\s+\((forward|backward)\):\s*(\d+)/i;
+    // "Marco Polo (backward): 500 -> 490 -> 28 humans"
+    const regex = /^(.+?)\s+\((forward|backward)\):\s*(\d+)\s*[→\->]+\s*(\d+)\s*[→\->]+\s*(\d+)\s*humans?/i;
     const match = rawMessage.match(regex);
 
     if (match) {
         return {
             name: match[1].trim(),
             direction: match[2].toLowerCase(),
-            visited: parseInt(match[3], 10)
+            total: parseInt(match[3], 10),
+            filtered: parseInt(match[4], 10),
+            humans: parseInt(match[5], 10)
         };
     }
 
@@ -86,7 +88,7 @@ const LogLine = ({ log }) => {
 
     // Render based on status
     if (status === 'log' && parsed) {
-        // Parsed log: Show name and visited count clearly
+        // Parsed log: Show name and full breakdown
         const dirColor = parsed.direction === 'forward' ? 'text-blue-300' : 'text-purple-300';
 
         return (
@@ -94,10 +96,10 @@ const LogLine = ({ log }) => {
                 <span className="text-zinc-600 flex-shrink-0">[{log.time}]</span>
                 <Badge type={status} direction={parsed.direction} />
                 <span className={dirColor}>
-                    Checking: <span className="font-semibold">{parsed.name}</span>
+                    <span className="font-semibold">{parsed.name}</span>
                 </span>
                 <span className="text-zinc-500 flex-shrink-0">
-                    (Visited: <span className="text-amber-400 font-semibold">{parsed.visited}</span>)
+                    {parsed.total} → {parsed.filtered} → <span className="text-green-400 font-semibold">{parsed.humans}</span> humans
                 </span>
             </div>
         );
@@ -138,7 +140,7 @@ const LogLine = ({ log }) => {
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
-const StatusConsole = ({ loading }) => {
+const StatusConsole = ({ loading, visitedCount = 0 }) => {
     const [logs, setLogs] = useState([]);
     const logsEndRef = useRef(null);
     const wasLoadingRef = useRef(false);
@@ -215,6 +217,7 @@ const StatusConsole = ({ loading }) => {
 
             {/* Stats Bar */}
             <div className="flex items-center gap-4 px-3 py-1.5 bg-zinc-900/50 border-b border-zinc-800/50 font-mono text-[10px] text-zinc-500">
+                <span>Visited: <span className="text-amber-400 font-bold">{visitedCount}</span></span>
                 <span>Nodes: <span className="text-cyan-400">{metrics.nodes}</span></span>
                 <span>Events: <span className="text-purple-400">{metrics.events}</span></span>
             </div>
