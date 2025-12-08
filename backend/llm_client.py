@@ -13,11 +13,25 @@ load_dotenv()
 # CONFIGURATION
 # =============================================================================
 
-# Model Hierarchy - ordered by preference (speed/cost)
+# Model Hierarchy - VERIFIED WORKING MODELS (sorted by latency)
+# Tested on 2025-12-08 with check_models.py
 MODELS = [
-    "gemini-1.5-flash",    # Fastest, cheapest
-    "gemini-1.5-pro",      # More capable
-    "gemini-1.0-pro",      # Legacy fallback
+    # Fast Gemini models
+    "gemini-flash-lite-latest",              # 929ms  - Fastest!
+    "gemini-2.5-flash-lite-preview-09-2025", # 2770ms
+    "gemini-2.5-flash-lite",                 # 4468ms
+    
+    # Gemma models (good quality)
+    "gemma-3-27b-it",                        # 1168ms
+    "gemma-3n-e4b-it",                       # 1233ms
+    "gemma-3n-e2b-it",                       # 1844ms
+    "gemma-3-1b-it",                         # 2043ms
+    "gemma-3-4b-it",                         # 3683ms
+    
+    # Specialty models
+    "gemini-robotics-er-1.5-preview",        # 1402ms
+    
+    # Excluded: gemma-3-12b-it (62129ms - too slow)
 ]
 
 # Load API Keys from environment (comma-separated)
