@@ -313,11 +313,26 @@ class BidirectionalBFS:
                 self.last_heartbeat = time.time()
 
                 tasks = [self._process_node(node, direction) for node in level_nodes]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-
-                for result in results:
-                    if isinstance(result, Exception) or not result:
+                
+                # TRUE STREAMING: Use as_completed to yield results immediately
+                for completed_task in asyncio.as_completed(tasks):
+                    try:
+                        result = await completed_task
+                    except Exception as e:
+                        logger.error(f"Task exception: {e}")
                         continue
+                    
+                    if not result:
+                        continue
+                    
+                    # INSTANT LOG: Send log message to frontend immediately
+                    if result.get("log"):
+                        yield json.dumps({
+                            "status": "log",
+                            "direction": direction,
+                            "message": result["log"]
+                        })
+                        self.last_heartbeat = time.time()
 
                     for child in result["children"]:
                         if child in parent_own:
@@ -367,9 +382,11 @@ class BidirectionalBFS:
                 to_check = filtered[:MAX_CANDIDATES_TO_CHECK]
                 humans = await self._batch_check_categories_safe(to_check)
 
-                logger.info(f"{current_node} ({direction}): {len(candidates)} → {len(filtered)} → {len(humans)} humans")
+                # Build log string for frontend
+                log_msg = f"{current_node} ({direction}): {len(candidates)} → {len(filtered)} → {len(humans)} humans"
+                logger.info(log_msg)
 
-                return {"node": current_node, "children": humans[:MAX_DEGREE]}
+                return {"node": current_node, "children": humans[:MAX_DEGREE], "log": log_msg}
 
         except Exception as e:
             logger.error(f"Error processing {current_node}: {e}")

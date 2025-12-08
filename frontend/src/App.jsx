@@ -58,6 +58,11 @@ function App() {
             window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
             break;
 
+          case 'log':
+            // INSTANT LOG: Per-node streaming log from as_completed
+            window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
+            break;
+
           case 'finished':
             // Path found! Set path and stop loading
             const pathData = data.path_with_context || data.path;

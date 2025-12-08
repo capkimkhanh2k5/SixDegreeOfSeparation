@@ -3,153 +3,95 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 // ============================================================================
 // HELPER: Parse incoming log data
 // ============================================================================
-
 const parseLogData = (data) => {
     if (typeof data === 'object' && data !== null) {
         return data;
     }
     if (typeof data === 'string') {
-        const jsonMatch = data.match(/\{.*\}/s);
-        if (jsonMatch) {
-            try {
-                return JSON.parse(jsonMatch[0]);
-            } catch {
-                return { status: 'info', message: data };
-            }
+        try {
+            return JSON.parse(data);
+        } catch {
+            return { status: 'info', message: data };
         }
-        return { status: 'info', message: data };
     }
-    return { status: 'unknown', message: String(data) };
+    return { status: 'info', message: String(data) };
 };
 
 // ============================================================================
-// SUB-COMPONENTS
+// BADGE COMPONENT - Colored buttons like terminal
 // ============================================================================
-
-// HUD Metric Card
-const MetricCard = ({ label, value, color = 'cyan' }) => {
-    const colorClasses = {
-        cyan: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10',
-        purple: 'text-purple-400 border-purple-500/30 bg-purple-500/10',
-        amber: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
-    };
-
-    return (
-        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${colorClasses[color]} backdrop-blur-sm`}>
-            <div className="flex flex-col">
-                <span className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</span>
-                <span className={`text-sm font-mono font-bold ${colorClasses[color].split(' ')[0]}`}>{value}</span>
-            </div>
-        </div>
-    );
-};
-
-// Colored badge button (replaces emoji)
-const StatusBadge = ({ type, direction }) => {
-    const getBadgeConfig = () => {
-        switch (type) {
-            case 'exploring':
-                if (direction === 'forward') {
-                    return { color: 'bg-blue-500', label: 'FWD', textColor: 'text-white' };
-                }
-                return { color: 'bg-purple-500', label: 'BWD', textColor: 'text-white' };
-            case 'finished':
-                return { color: 'bg-green-500', label: 'OK', textColor: 'text-white' };
-            case 'error':
-                return { color: 'bg-red-500', label: 'ERR', textColor: 'text-white' };
-            case 'info':
-                return { color: 'bg-zinc-500', label: 'INFO', textColor: 'text-white' };
-            case 'heartbeat':
-                return { color: 'bg-zinc-600', label: '...', textColor: 'text-zinc-300' };
-            default:
-                return { color: 'bg-zinc-600', label: 'LOG', textColor: 'text-white' };
+const Badge = ({ type, direction }) => {
+    const getBadge = () => {
+        if (type === 'log' || type === 'exploring') {
+            if (direction === 'forward') {
+                return { label: 'FWD', bg: 'bg-blue-600', text: 'text-white' };
+            }
+            return { label: 'BWD', bg: 'bg-purple-600', text: 'text-white' };
         }
+        if (type === 'finished') {
+            return { label: 'OK', bg: 'bg-green-600', text: 'text-white' };
+        }
+        if (type === 'error') {
+            return { label: 'ERR', bg: 'bg-red-600', text: 'text-white' };
+        }
+        if (type === 'heartbeat') {
+            return { label: '...', bg: 'bg-zinc-700', text: 'text-zinc-400' };
+        }
+        return { label: 'INFO', bg: 'bg-zinc-600', text: 'text-zinc-200' };
     };
 
-    const config = getBadgeConfig();
+    const config = getBadge();
 
     return (
-        <span className={`
-            inline-flex items-center justify-center
-            px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider
-            ${config.color} ${config.textColor}
-            min-w-[40px]
-        `}>
+        <span className={`${config.bg} ${config.text} px-1.5 py-0.5 rounded text-[10px] font-bold uppercase min-w-[36px] text-center`}>
             {config.label}
         </span>
     );
 };
 
-// Single log entry - terminal style
-const LogEntry = ({ log }) => {
-    const { status, direction, nodes, stats, message } = log.parsed;
+// ============================================================================
+// SINGLE LOG LINE - Shows exact backend message
+// ============================================================================
+const LogLine = ({ log }) => {
+    const { status, direction, message } = log.parsed;
 
-    // Format the log message like the backend terminal
-    const getLogContent = () => {
-        if (status === 'exploring' && nodes && nodes.length > 0) {
-            const nodeName = nodes[0];
-            const dir = direction === 'forward' ? 'forward' : 'backward';
-            const visited = stats?.visited || '?';
-            const humans = stats?.humans || '?';
-            return `${nodeName} (${dir}): ${visited} → ${humans} humans`;
+    // Skip heartbeats in display
+    if (status === 'heartbeat') return null;
+
+    // Get the display text - prioritize 'message' field for 'log' status
+    const getDisplayText = () => {
+        if (status === 'log' && message) {
+            return message; // Exact message from backend: "Carlo Rubbia (forward): 318 → 22 humans"
         }
-        if (status === 'finished') {
-            return message || 'Path found!';
+        if (message) return message;
+        if (log.parsed.nodes?.[0]) {
+            return `Checking: ${log.parsed.nodes[0]}`;
         }
-        if (status === 'error') {
-            return message || 'Error occurred';
-        }
-        if (status === 'info') {
-            return message || 'Info';
-        }
-        if (status === 'heartbeat') {
-            return 'System active...';
-        }
-        return message || JSON.stringify(log.parsed);
+        return JSON.stringify(log.parsed);
     };
 
-    // Skip heartbeat in detailed view
-    if (status === 'heartbeat') {
-        return null;
-    }
-
-    const getBorderColor = () => {
-        switch (status) {
-            case 'exploring':
-                return direction === 'forward' ? 'border-l-blue-500' : 'border-l-purple-500';
-            case 'finished':
-                return 'border-l-green-500';
-            case 'error':
-                return 'border-l-red-500';
-            default:
-                return 'border-l-zinc-600';
+    // Text color based on direction
+    const getTextColor = () => {
+        if (status === 'log' || status === 'exploring') {
+            if (direction === 'forward') return 'text-blue-300';
+            if (direction === 'backward') return 'text-purple-300';
         }
+        if (status === 'finished') return 'text-green-300';
+        if (status === 'error') return 'text-red-300';
+        return 'text-zinc-400';
     };
 
     return (
-        <div className={`
-            flex items-center gap-3 px-3 py-2 
-            border-l-2 ${getBorderColor()} 
-            bg-zinc-800/30 rounded-r
-            font-mono text-xs
-            animate-slideIn
-        `}>
+        <div className="flex items-start gap-2 py-0.5 hover:bg-white/5 px-2 -mx-2 rounded font-mono text-xs">
             {/* Timestamp */}
             <span className="text-zinc-600 flex-shrink-0">[{log.time}]</span>
 
-            {/* Status badge */}
-            <StatusBadge type={status} direction={direction} />
+            {/* Badge */}
+            <Badge type={status} direction={direction} />
 
-            {/* Message */}
-            <span className={`
-                flex-grow truncate
-                ${status === 'finished' ? 'text-green-400 font-bold' :
-                    status === 'error' ? 'text-red-400' :
-                        status === 'exploring' && direction === 'forward' ? 'text-blue-300' :
-                            status === 'exploring' && direction === 'backward' ? 'text-purple-300' :
-                                'text-zinc-300'}
-            `}>
-                {getLogContent()}
+            {/* Message - exact text from backend */}
+            <span className={`${getTextColor()} break-all`}>
+                {getDisplayText()}
             </span>
         </div>
     );
@@ -158,28 +100,25 @@ const LogEntry = ({ log }) => {
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
-
 const StatusConsole = ({ loading }) => {
     const [logs, setLogs] = useState([]);
     const logsEndRef = useRef(null);
-    const containerRef = useRef(null);
     const wasLoadingRef = useRef(false);
 
     // Reset logs when loading starts
     useEffect(() => {
         if (loading && !wasLoadingRef.current) {
             setLogs([]);
-            console.log('[StatusConsole] Loading started, logs reset');
         }
         wasLoadingRef.current = loading;
     }, [loading]);
 
-    // Always listen for events
+    // Listen for log events
     useEffect(() => {
         const handleLog = (event) => {
             const rawData = event.detail;
             const now = new Date();
-            const timeString = now.toLocaleTimeString('en-US', {
+            const time = now.toLocaleTimeString('en-US', {
                 hour12: false,
                 hour: '2-digit',
                 minute: '2-digit',
@@ -187,10 +126,9 @@ const StatusConsole = ({ loading }) => {
             });
 
             const parsed = parseLogData(rawData);
-            console.log('[StatusConsole] Received:', parsed.status, parsed.nodes?.[0] || parsed.message);
 
             setLogs(prev => [...prev, {
-                time: timeString,
+                time,
                 parsed,
                 id: Date.now() + Math.random()
             }]);
@@ -202,69 +140,59 @@ const StatusConsole = ({ loading }) => {
 
     // Auto-scroll to bottom
     useEffect(() => {
-        logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [logs]);
 
-    // Calculate metrics from latest exploring log
+    // Calculate metrics
     const metrics = useMemo(() => {
-        const latestExploring = [...logs].reverse().find(l => l.parsed.status === 'exploring');
-        const stats = latestExploring?.parsed?.stats || {};
-        const visited = stats.visited || 0;
-        const time = stats.time || 0;
-        const speed = time > 0 ? (visited / time).toFixed(1) : '0';
-        return { visited, time, speed };
-    }, [logs]);
-
-    // Filter out consecutive heartbeats
-    const displayLogs = useMemo(() => {
-        return logs.filter(log => log.parsed.status !== 'heartbeat');
+        const logEntries = logs.filter(l => l.parsed.status === 'log' || l.parsed.status === 'exploring');
+        return {
+            nodes: logEntries.length,
+            events: logs.length,
+        };
     }, [logs]);
 
     return (
-        <div className="h-full flex flex-col bg-zinc-900/80 backdrop-blur-xl rounded-2xl border border-zinc-700/50 overflow-hidden shadow-2xl">
+        <div className="h-full flex flex-col bg-zinc-950 rounded-xl border border-zinc-800 overflow-hidden">
 
-            {/* Header */}
-            <div className="px-4 py-3 bg-zinc-800/50 border-b border-zinc-700/50">
-                {/* Title */}
-                <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${loading ? 'bg-green-400 animate-pulse shadow-lg shadow-green-400/50' : 'bg-zinc-600'}`} />
-                        <span className="text-xs font-mono text-zinc-400 uppercase tracking-widest">
-                            BFS Engine
-                        </span>
+            {/* Header Bar - Terminal style */}
+            <div className="flex items-center justify-between px-3 py-2 bg-zinc-900 border-b border-zinc-800">
+                <div className="flex items-center gap-2">
+                    {/* Traffic light dots */}
+                    <div className="flex gap-1.5">
+                        <span className="w-3 h-3 rounded-full bg-red-500" />
+                        <span className="w-3 h-3 rounded-full bg-yellow-500" />
+                        <span className="w-3 h-3 rounded-full bg-green-500" />
                     </div>
-                    {loading && (
-                        <span className="flex items-center gap-1.5 text-xs font-mono text-green-400 animate-pulse">
-                            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
-                            LIVE
-                        </span>
-                    )}
+                    <span className="text-zinc-500 ml-2 font-mono text-xs">BFS Engine</span>
                 </div>
 
-                {/* Metrics */}
-                <div className="flex flex-wrap gap-2">
-                    <MetricCard label="Time" value={`${metrics.time}s`} color="cyan" />
-                    <MetricCard label="Visited" value={`${metrics.visited}`} color="purple" />
-                    <MetricCard label="Speed" value={`${metrics.speed}/s`} color="amber" />
-                </div>
+                {/* Live indicator */}
+                {loading && (
+                    <div className="flex items-center gap-1.5 text-green-400 font-mono text-xs">
+                        <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                        <span>LIVE</span>
+                    </div>
+                )}
             </div>
 
-            {/* Log List */}
-            <div
-                ref={containerRef}
-                className="flex-grow overflow-y-auto p-2 space-y-1 custom-scrollbar bg-zinc-900"
-            >
-                {displayLogs.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-zinc-600">
-                        <svg className="w-10 h-10 mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
-                        </svg>
-                        <span className="text-sm font-mono">Awaiting search...</span>
+            {/* Stats Bar */}
+            <div className="flex items-center gap-4 px-3 py-1.5 bg-zinc-900/50 border-b border-zinc-800/50 font-mono text-[10px] text-zinc-500">
+                <span>Nodes: <span className="text-cyan-400">{metrics.nodes}</span></span>
+                <span>Events: <span className="text-purple-400">{metrics.events}</span></span>
+            </div>
+
+            {/* Log Area */}
+            <div className="flex-grow overflow-y-auto p-3 space-y-0.5 custom-scrollbar bg-zinc-950">
+                {logs.length === 0 ? (
+                    <div className="h-full flex items-center justify-center text-zinc-700 font-mono text-xs">
+                        <span>$ awaiting input...</span>
+                        <span className="animate-pulse ml-1">_</span>
                     </div>
                 ) : (
                     <>
-                        {displayLogs.map((log) => (
-                            <LogEntry key={log.id} log={log} />
+                        {logs.map(log => (
+                            <LogLine key={log.id} log={log} />
                         ))}
                         <div ref={logsEndRef} />
                     </>
@@ -273,9 +201,8 @@ const StatusConsole = ({ loading }) => {
 
             {/* Footer */}
             {logs.length > 0 && (
-                <div className="px-4 py-2 bg-zinc-800/30 border-t border-zinc-700/30 flex justify-between items-center text-[10px] text-zinc-600 font-mono">
-                    <span>{displayLogs.length} events</span>
-                    <span>{displayLogs.filter(l => l.parsed.status === 'exploring').length} nodes explored</span>
+                <div className="px-3 py-1.5 bg-zinc-900/50 border-t border-zinc-800/50 font-mono text-[10px] text-zinc-600">
+                    <span className="text-green-500">$</span> {metrics.nodes} nodes processed | {metrics.events} total events
                 </div>
             )}
         </div>
