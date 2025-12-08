@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +8,7 @@ import httpx
 import json
 import os
 import re
+import asyncio
 from dotenv import load_dotenv
 
 from .bfs import find_shortest_path
@@ -21,7 +22,7 @@ app = FastAPI()
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8000", "http://localhost:5173"],
+    allow_origins=["http://localhost:8000", "http://localhost:5173", "ws://localhost:8000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -235,6 +236,127 @@ async def resolve_name_endpoint(q: str = Query(..., min_length=1)):
         except Exception as e:
             print(f"Error resolving name: {e}")
             raise HTTPException(status_code=500, detail="Failed to resolve name")
+
+# =============================================================================
+# WEBSOCKET ENDPOINT - TRUE REAL-TIME UPDATES
+# =============================================================================
+
+@app.websocket("/ws/search")
+async def websocket_search(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time BFS search updates.
+    Protocol:
+    1. Client sends: {"start": "Person A", "end": "Person B"}
+    2. Server streams: exploring, heartbeat, finished, context_update messages
+    """
+    await websocket.accept()
+    print("[WS] Client connected")
+    
+    try:
+        # Receive search request
+        data = await websocket.receive_json()
+        start_input = data.get("start", "")
+        end_input = data.get("end", "")
+        
+        if not start_input or not end_input:
+            await websocket.send_json({"status": "error", "message": "Missing start or end parameter"})
+            await websocket.close()
+            return
+        
+        print(f"[WS] Search request: {start_input} -> {end_input}")
+        
+        # Resolve names
+        headers = {"User-Agent": "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"}
+        async with httpx.AsyncClient(headers=headers, timeout=10.0) as resolve_client:
+            start_page = await resolve_wikipedia_name(start_input, resolve_client) or start_input
+            end_page = await resolve_wikipedia_name(end_input, resolve_client) or end_input
+        
+        print(f"[WS] Resolved: {start_input} -> {start_page}")
+        print(f"[WS] Resolved: {end_input} -> {end_page}")
+        
+        # Send resolution info
+        await websocket.send_json({
+            "status": "info",
+            "message": f"Searching: {start_page} ↔ {end_page}"
+        })
+        
+        # Stream BFS updates in real-time
+        async for message in find_shortest_path(start_page, end_page):
+            msg_data = json.loads(message)
+            
+            if msg_data["status"] == "finished":
+                # ============================================
+                # PROGRESSIVE STREAMING: Send path immediately
+                # ============================================
+                path_nodes = msg_data["path"]
+                print(f"[WS] Path found with {len(path_nodes)} nodes. Sending immediately...")
+                
+                # Fetch page details
+                path_details = await get_page_details(path_nodes)
+                
+                # Build initial response with null contexts
+                enriched_path = []
+                for i, node_title in enumerate(path_nodes):
+                    node_detail = next((d for d in path_details if d.title == node_title), None)
+                    if node_detail:
+                        enriched_path.append({
+                            "node": node_detail.dict(),
+                            "edge_context": None
+                        })
+                
+                # Send path immediately
+                await websocket.send_json({"status": "finished", "path_with_context": enriched_path})
+                print(f"[WS] Initial path sent!")
+                
+                # Generate contexts in parallel
+                async def generate_context_for_edge(edge_index: int, p1: str, p2: str):
+                    context = await generate_relationship_context(p1, p2)
+                    return edge_index, context
+                
+                edge_tasks = []
+                for i in range(len(path_nodes) - 1):
+                    p1 = path_nodes[i]
+                    p2 = path_nodes[i + 1]
+                    task = asyncio.create_task(generate_context_for_edge(i, p1, p2))
+                    edge_tasks.append(task)
+                
+                # Stream context updates as they complete
+                for completed_task in asyncio.as_completed(edge_tasks):
+                    try:
+                        edge_index, context = await completed_task
+                        await websocket.send_json({
+                            "status": "context_update",
+                            "edge_index": edge_index,
+                            "context": context
+                        })
+                        print(f"[WS] Context {edge_index + 1}/{len(path_nodes) - 1} sent")
+                    except Exception as ctx_err:
+                        print(f"[WS] Context error: {ctx_err}")
+                        await websocket.send_json({
+                            "status": "context_update",
+                            "edge_index": edge_index,
+                            "context": "Connected via Wikipedia"
+                        })
+                
+                print(f"[WS] All contexts sent!")
+                break  # Search complete
+                
+            else:
+                # Forward all other messages (exploring, heartbeat, error) immediately
+                await websocket.send_json(msg_data)
+        
+        # Close connection gracefully
+        await websocket.close()
+        print("[WS] Connection closed normally")
+        
+    except WebSocketDisconnect:
+        print("[WS] Client disconnected")
+    except Exception as e:
+        print(f"[WS] Error: {e}")
+        try:
+            await websocket.send_json({"status": "error", "message": str(e)})
+        except:
+            pass
 
 @app.post("/api/shortest-path")
 async def get_shortest_path(request: PathRequest):

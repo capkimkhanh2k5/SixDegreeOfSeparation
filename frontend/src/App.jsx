@@ -19,88 +19,86 @@ function App() {
 
     setLoading(true);
     setPath(null);
-    setError(null); // Clear previous errors
+    setError(null);
 
-    try {
-      const response = await fetch('/api/shortest-path', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ start_page: startPage, end_page: endPage }),
-      });
+    // Determine WebSocket URL based on current location
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsHost = window.location.host;
+    const wsUrl = `${wsProtocol}//${wsHost}/ws/search`;
 
-      if (!response.ok) {
-        throw new Error('Network response was not ok');
-      }
+    console.log('[WS] Connecting to:', wsUrl);
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
+    const ws = new WebSocket(wsUrl);
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+    ws.onopen = () => {
+      console.log('[WS] Connected, sending search request...');
+      ws.send(JSON.stringify({ start: startPage, end: endPage }));
+    };
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('[WS] Received:', data.status, data.nodes?.[0] || data.message || '');
 
-        for (const line of lines) {
-          if (line.trim()) {
-            try {
-              const data = JSON.parse(line);
+        if (data.status === 'finished') {
+          // PROGRESSIVE STREAMING: Set path immediately
+          const pathData = data.path_with_context || data.path;
+          setPath(pathData);
+          setLoading(false);
+          console.log('[WS] Path received!', pathData.length, 'nodes');
 
-              if (data.status === 'finished') {
-                // PROGRESSIVE STREAMING: Set path immediately with null contexts
-                // The path_with_context has structure: [{node: {...}, edge_context: null/string}, ...]
-                const pathData = data.path_with_context || data.path;
-                setPath(pathData);
-                setLoading(false);
-                console.log('[PROGRESSIVE] Path received immediately!', pathData.length, 'nodes');
-
-              } else if (data.status === 'context_update') {
-                // PROGRESSIVE STREAMING: Update specific edge context
-                // Immutably update the path state
-                setPath(prevPath => {
-                  if (!prevPath) return prevPath;
-                  const newPath = [...prevPath];
-                  if (data.edge_index >= 0 && data.edge_index < newPath.length) {
-                    newPath[data.edge_index] = {
-                      ...newPath[data.edge_index],
-                      edge_context: data.context
-                    };
-                  }
-                  return newPath;
-                });
-                console.log(`[PROGRESSIVE] Context ${data.edge_index + 1} updated:`, data.context?.substring(0, 50) + '...');
-
-              } else if (data.status === 'heartbeat') {
-                // Heartbeat - keep connection alive, optionally log
-                console.log(`[HEARTBEAT] ${data.time}s - ${data.message || 'alive'}`);
-                window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
-
-              } else if (data.status === 'exploring') {
-                // BFS exploration update - dispatch to StatusConsole
-                console.log('[EXPLORING]', data.direction, data.nodes?.[0], 'visited:', data.stats?.visited);
-                window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
-
-              } else if (data.status === 'error') {
-                setError(data.message);
-                setLoading(false);
-
-              } else if (data.status === 'info' || data.status === 'visiting') {
-                window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
-              }
-            } catch (e) {
-              console.error('Error parsing JSON:', e);
+        } else if (data.status === 'context_update') {
+          // Update specific edge context
+          setPath(prevPath => {
+            if (!prevPath) return prevPath;
+            const newPath = [...prevPath];
+            if (data.edge_index >= 0 && data.edge_index < newPath.length) {
+              newPath[data.edge_index] = {
+                ...newPath[data.edge_index],
+                edge_context: data.context
+              };
             }
-          }
+            return newPath;
+          });
+          console.log(`[WS] Context ${data.edge_index + 1} updated`);
+
+        } else if (data.status === 'exploring') {
+          // Real-time exploration update - dispatch IMMEDIATELY
+          console.log('[WS][EXPLORING]', data.direction, data.nodes?.[0], 'visited:', data.stats?.visited);
+          window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
+
+        } else if (data.status === 'heartbeat') {
+          console.log(`[WS][HEARTBEAT] ${data.time}s`);
+          window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
+
+        } else if (data.status === 'error') {
+          setError(data.message);
+          setLoading(false);
+          ws.close();
+
+        } else if (data.status === 'info') {
+          console.log('[WS][INFO]', data.message);
+          window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
         }
+      } catch (e) {
+        console.error('[WS] Error parsing message:', e);
       }
-    } catch (error) {
-      console.error('Error fetching data:', error);
-      setError("Connection failed. Please check if backend is running.");
+    };
+
+    ws.onerror = (error) => {
+      console.error('[WS] Connection error:', error);
+      setError("WebSocket connection failed. Please check if backend is running.");
       setLoading(false);
-    }
+    };
+
+    ws.onclose = (event) => {
+      console.log('[WS] Connection closed:', event.code, event.reason);
+      if (event.code !== 1000 && loading) {
+        // Abnormal close while still loading
+        setError("Connection lost. Search may be incomplete.");
+        setLoading(false);
+      }
+    };
   };
 
   const handleReset = () => {
