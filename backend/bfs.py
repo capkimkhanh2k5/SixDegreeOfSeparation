@@ -47,8 +47,11 @@ SOFT_TIMEOUT_SECONDS = 98   # Graceful exit before hard timeout
 # Search limits
 MAX_NODES_VISITED = 5000    # Increased for deeper searches
 BATCH_SIZE = 25             # Nodes to process per iteration
-CATEGORY_BATCH_SIZE = 50    # AGGRESSIVE: 50 titles per API call (was 10)
+CATEGORY_BATCH_SIZE = 30    # TUNED: 30 titles per API call (was 50, too aggressive)
 MAX_CANDIDATES_TO_CHECK = 200
+
+# Heartbeat settings
+HEARTBEAT_INTERVAL_SECONDS = 3.0  # Send keepalive every 3 seconds
 MAX_DEGREE = 30
 MAX_STEP_COUNT = 300
 CONCURRENT_REQUESTS = 15
@@ -258,6 +261,7 @@ class BidirectionalBFS:
 
     async def _search_impl(self) -> AsyncGenerator[str, None]:
         self.start_time = time.time()
+        self.last_heartbeat = time.time()  # Track last heartbeat
         self.queue_f = deque([self.start_page])
         self.parent_f = {self.start_page: None}
         self.queue_b = deque([self.end_page])
@@ -304,6 +308,9 @@ class BidirectionalBFS:
                     "status": "exploring", "direction": direction, "nodes": level_nodes,
                     "stats": {"visited": total_visited, "time": round(elapsed, 1)}
                 })
+                
+                # Update heartbeat timestamp after exploration message
+                self.last_heartbeat = time.time()
 
                 tasks = [self._process_node(node, direction) for node in level_nodes]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -330,6 +337,17 @@ class BidirectionalBFS:
                     save_cache()
                     yield json.dumps({"status": "error", "message": "Step limit"})
                     return
+                
+                # Send heartbeat if no message sent in HEARTBEAT_INTERVAL_SECONDS
+                now = time.time()
+                if now - self.last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
+                    yield json.dumps({
+                        "status": "heartbeat",
+                        "time": round(elapsed, 1),
+                        "visited": total_visited,
+                        "message": "Search in progress..."
+                    })
+                    self.last_heartbeat = now
 
             save_cache()
             yield json.dumps({"status": "not_found", "message": "No path found"})

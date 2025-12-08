@@ -17,6 +17,10 @@ API_KEYS = [key.strip() for key in api_keys_string.split(",") if key.strip()]
 
 CURRENT_KEY_INDEX = 0
 
+# Lock for thread-safe API key rotation during concurrent calls
+import threading
+_key_rotation_lock = threading.Lock()
+
 def configure_genai():
     """Configures Gemini with the current API key."""
     global CURRENT_KEY_INDEX
@@ -29,11 +33,12 @@ def configure_genai():
     print(f"[LLM_CLIENT] Configured with API Key index {CURRENT_KEY_INDEX} (Ends with ...{current_key[-4:]})")
 
 def rotate_api_key():
-    """Switches to the next API key in the list."""
+    """Switches to the next API key in the list (thread-safe)."""
     global CURRENT_KEY_INDEX
-    CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
-    configure_genai()
-    print(f"[LLM_CLIENT] ⚠️ Rate Limit Hit. Rotated to API Key index {CURRENT_KEY_INDEX}")
+    with _key_rotation_lock:
+        CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
+        configure_genai()
+        print(f"[LLM_CLIENT] ⚠️ Rate Limit Hit. Rotated to API Key index {CURRENT_KEY_INDEX}")
 
 # Initial Configuration
 configure_genai()

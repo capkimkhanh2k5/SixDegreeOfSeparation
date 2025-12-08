@@ -251,44 +251,79 @@ async def get_shortest_path(request: PathRequest):
     print(f"Resolved: {request.end_page} -> {end_page}")
 
     async def event_generator():
+        import asyncio
+        
         try:
             async for message in find_shortest_path(start_page, end_page):
                 data = json.loads(message)
                 if data["status"] == "finished":
-                    # Fetch details for the final path
+                    # ====================================================
+                    # PROGRESSIVE STREAMING: Send path IMMEDIATELY
+                    # ====================================================
                     path_nodes = data["path"]
+                    print(f"[PROGRESSIVE] Path found with {len(path_nodes)} nodes. Sending immediately...")
+                    
+                    # Fetch page details (images, URLs) - this is fast
                     path_details = await get_page_details(path_nodes)
                     
-                    # Generate context for edges
+                    # Build initial response with NULL contexts (instant!)
                     enriched_path = []
-                    for i in range(len(path_nodes) - 1):
-                        p1 = path_nodes[i]
-                        p2 = path_nodes[i+1]
-                        
-                        # Find detail object
-                        p1_detail = next((d for d in path_details if d.title == p1), None)
-                        
-                        context = await generate_relationship_context(p1, p2)
-                        
-                        if p1_detail:
+                    for i, node_title in enumerate(path_nodes):
+                        node_detail = next((d for d in path_details if d.title == node_title), None)
+                        if node_detail:
                             enriched_path.append({
-                                "node": p1_detail.dict(),
-                                "edge_context": context
+                                "node": node_detail.dict(),
+                                "edge_context": None  # Placeholder - will be streamed later
                             })
                     
-                    # Add last node
-                    last_node = path_nodes[-1]
-                    last_detail = next((d for d in path_details if d.title == last_node), None)
-                    if last_detail:
-                        enriched_path.append({
-                            "node": last_detail.dict(),
-                            "edge_context": None # End of path
-                        })
-
-                    final_response = {"status": "finished", "path_with_context": enriched_path}
-                    yield json.dumps(final_response) + "\n"
+                    # SEND IMMEDIATELY - User sees path NOW!
+                    initial_response = {"status": "finished", "path_with_context": enriched_path}
+                    yield json.dumps(initial_response) + "\n"
+                    print(f"[PROGRESSIVE] Initial path sent! Now generating contexts in parallel...")
+                    
+                    # ====================================================
+                    # PARALLEL CONTEXT GENERATION: Stream updates
+                    # ====================================================
+                    async def generate_context_for_edge(edge_index: int, p1: str, p2: str):
+                        """Generate context for a single edge and return with index."""
+                        context = await generate_relationship_context(p1, p2)
+                        return edge_index, context
+                    
+                    # Create tasks for ALL edges in parallel
+                    edge_tasks = []
+                    for i in range(len(path_nodes) - 1):
+                        p1 = path_nodes[i]
+                        p2 = path_nodes[i + 1]
+                        task = asyncio.create_task(generate_context_for_edge(i, p1, p2))
+                        edge_tasks.append(task)
+                    
+                    # Stream context updates as they complete (asyncio.as_completed)
+                    for completed_task in asyncio.as_completed(edge_tasks):
+                        try:
+                            edge_index, context = await completed_task
+                            context_update = {
+                                "status": "context_update",
+                                "edge_index": edge_index,
+                                "context": context
+                            }
+                            yield json.dumps(context_update) + "\n"
+                            print(f"[PROGRESSIVE] Context {edge_index + 1}/{len(path_nodes) - 1} sent: {context[:50]}...")
+                        except Exception as ctx_err:
+                            print(f"[PROGRESSIVE] Error generating context for edge {edge_index}: {ctx_err}")
+                            # Send fallback context
+                            fallback_update = {
+                                "status": "context_update",
+                                "edge_index": edge_index,
+                                "context": "Connected via Wikipedia"
+                            }
+                            yield json.dumps(fallback_update) + "\n"
+                    
+                    print(f"[PROGRESSIVE] All contexts sent!")
+                    
                 else:
+                    # Forward all other messages (exploring, heartbeat, etc.)
                     yield message + "\n"
+                    
         except Exception as e:
             yield json.dumps({"status": "error", "message": str(e)}) + "\n"
 
