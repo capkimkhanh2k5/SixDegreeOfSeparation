@@ -1,53 +1,102 @@
 import os
 import json
 import re
-import time
 import asyncio
 import google.generativeai as genai
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
-# Load API Keys from environment variables (comma-separated)
-# Example in .env: GEMINI_API_KEYS=key1,key2,key3
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+# Model Hierarchy - ordered by preference (speed/cost)
+MODELS = [
+    "gemini-1.5-flash",    # Fastest, cheapest
+    "gemini-1.5-pro",      # More capable
+    "gemini-1.0-pro",      # Legacy fallback
+]
+
+# Load API Keys from environment (comma-separated)
 api_keys_string = os.getenv("GEMINI_API_KEYS", "")
 API_KEYS = [key.strip() for key in api_keys_string.split(",") if key.strip()]
 
-CURRENT_KEY_INDEX = 0
+if not API_KEYS:
+    print("[LLM_CLIENT] ⚠️ WARNING: No API Keys found. Set GEMINI_API_KEYS in .env")
 
-# Lock for thread-safe API key rotation during concurrent calls
-import threading
-_key_rotation_lock = threading.Lock()
+# =============================================================================
+# CORE HELPER: Smart LLM Call with 2-Layer Fallback
+# =============================================================================
 
-def configure_genai():
-    """Configures Gemini with the current API key."""
-    global CURRENT_KEY_INDEX
-    if not API_KEYS:
-        print("ERROR: No API Keys found. Please set GEMINI_API_KEYS in .env file.")
-        return
+async def call_llm_with_fallback(
+    prompt: str,
+    operation_name: str = "LLM Call"
+) -> Optional[str]:
+    """
+    2-Layer Fallback Strategy:
+    - Outer Loop: Iterate through MODELS (flash → pro → 1.0-pro)
+    - Inner Loop: For each model, try ALL API keys before giving up
     
-    current_key = API_KEYS[CURRENT_KEY_INDEX]
-    genai.configure(api_key=current_key)
-    print(f"[LLM_CLIENT] Configured with API Key index {CURRENT_KEY_INDEX} (Ends with ...{current_key[-4:]})")
+    Returns the response text or None if all attempts fail.
+    """
+    if not API_KEYS:
+        print(f"[LLM_CLIENT] ❌ No API keys available for {operation_name}")
+        return None
+    
+    for model_name in MODELS:
+        # Try all keys for this model
+        for key_index, api_key in enumerate(API_KEYS):
+            try:
+                # Configure with current key
+                genai.configure(api_key=api_key)
+                
+                model = genai.GenerativeModel(model_name)
+                response = await model.generate_content_async(prompt)
+                
+                # Check for empty response
+                if not response.candidates or not response.candidates[0].content.parts:
+                    print(f"[LLM_CLIENT] ⚠️ Empty response from {model_name} (Key {key_index})")
+                    continue
+                
+                # Success!
+                return response.text
+                
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                # Rate limit / Quota error - try next key
+                if "429" in str(e) or "quota" in error_str or "resource" in error_str:
+                    print(f"[LLM_CLIENT] ⚠️ Rate limit on {model_name} (Key {key_index}). Trying next key...")
+                    await asyncio.sleep(0.5)  # Brief pause
+                    continue
+                
+                # Model not found or unavailable - skip to next model
+                elif "not found" in error_str or "unavailable" in error_str or "does not exist" in error_str:
+                    print(f"[LLM_CLIENT] ⚠️ Model {model_name} unavailable. Skipping to next model...")
+                    break  # Exit inner loop, try next model
+                
+                # Other errors - log and try next key
+                else:
+                    print(f"[LLM_CLIENT] ❌ Error on {model_name} (Key {key_index}): {e}")
+                    continue
+        
+        # All keys exhausted for this model
+        print(f"[LLM_CLIENT] 🔄 All keys exhausted on {model_name}. Falling back to next model...")
+    
+    # All models and keys exhausted
+    print(f"[LLM_CLIENT] ❌ CRITICAL: All models and keys exhausted for {operation_name}")
+    return None
 
-def rotate_api_key():
-    """Switches to the next API key in the list (thread-safe)."""
-    global CURRENT_KEY_INDEX
-    with _key_rotation_lock:
-        CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
-        configure_genai()
-        print(f"[LLM_CLIENT] ⚠️ Rate Limit Hit. Rotated to API Key index {CURRENT_KEY_INDEX}")
-
-# Initial Configuration
-configure_genai()
+# =============================================================================
+# API FUNCTIONS (Keep signatures compatible with existing code)
+# =============================================================================
 
 def generate_extraction_prompt(wiki_text: str, subject_name: str) -> str:
-    """
-    Generates the prompt for the LLM to extract factual relationships.
-    """
-    system_prompt = f"""
+    """Generates the prompt for entity extraction."""
+    return f"""
     You are an expert Entity Relation Extraction system for a "Six Degrees of Separation" algorithm.
     Your task is to analyze a section of a Wikipedia article about the subject: "{subject_name}".
 
@@ -83,87 +132,62 @@ def generate_extraction_prompt(wiki_text: str, subject_name: str) -> str:
         ]
     }}
     """
-    return system_prompt
+
 
 async def extract_relations(wiki_text: str, subject_name: str) -> List[str]:
     """
     Extracts related people from the given text using Gemini.
-    Returns a list of names.
+    Uses 2-layer fallback (models + keys).
     """
     if not API_KEYS:
-        print("WARNING: No API Keys configured. Returning empty list.")
         return []
 
     prompt = generate_extraction_prompt(wiki_text, subject_name)
     
-    retries = 0
-    max_retries = 5
+    response_text = await call_llm_with_fallback(prompt, f"extract_relations({subject_name})")
     
-    while retries < max_retries:
-        try:
-            model = genai.GenerativeModel('gemini-flash-latest')
-            response = await model.generate_content_async(prompt)
-            
-            if not response.candidates or not response.candidates[0].content.parts:
-                print(f"LLM Warning: Empty response for extraction {subject_name}. Finish reason: {response.candidates[0].finish_reason if response.candidates else 'Unknown'}")
-                return []
-                
-            text_response = response.text
-            
-            # Use regex to find the first JSON object
-            match = re.search(r'\{.*\}', text_response, re.DOTALL)
-            if match:
-                json_str = match.group(0)
-                data = json.loads(json_str)
-                
-                connections = data.get("connections", [])
-                names = [item["name"] for item in connections]
-                return names
-            else:
-                # Fallback
-                if text_response.startswith("```json"):
-                    text_response = text_response[7:]
-                if text_response.startswith("```"):
-                    text_response = text_response[3:]
-                if text_response.endswith("```"):
-                    text_response = text_response[:-3]
-                
-                data = json.loads(text_response.strip())
-                connections = data.get("connections", [])
-                names = [item["name"] for item in connections]
-                return names
-                
-        except Exception as e:
-            if "429" in str(e) or "quota" in str(e).lower():
-                print(f"Rate limit hit for {subject_name}. Rotating key and retrying...")
-                rotate_api_key()
-                # Short delay to allow config to propagate/reset
-                await asyncio.sleep(1) 
-                retries += 1
-            else:
-                print(f"Error calling LLM for {subject_name}: {e}")
-                return []
+    if not response_text:
+        return []
     
-    print(f"Max retries exceeded for {subject_name} (tried all keys).")
-    return []
-            
+    try:
+        # Parse JSON from response
+        match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if match:
+            data = json.loads(match.group(0))
+            connections = data.get("connections", [])
+            return [item["name"] for item in connections if "name" in item]
+        
+        # Fallback: try direct parse
+        cleaned = response_text.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        
+        data = json.loads(cleaned)
+        connections = data.get("connections", [])
+        return [item["name"] for item in connections if "name" in item]
+        
+    except Exception as e:
+        print(f"[LLM_CLIENT] Error parsing extraction response: {e}")
+        return []
+
+
 async def verify_relations(wiki_text: str, subject_name: str, target_name: str, candidates: List[str]) -> List[Dict[str, Any]]:
     """
-    Verifies candidates using the 'Strict Verification Prompt'.
-    Returns a list of dicts: [{'name': '...', 'type': '...', 'is_bridge': bool}]
+    Verifies candidates using LLM.
+    Uses 2-layer fallback.
     """
     if not API_KEYS or not candidates:
         return []
 
-    # Limit batch size to avoid overload (User suggested 100, let's stick to it)
-    # If candidates > 100, we might need to batch? For now let's just take top 100.
     candidates_subset = candidates[:100]
     candidates_str = ", ".join([f'"{c}"' for c in candidates_subset])
-    
-    # Truncate context to 5000 chars as per user request
     context_text = wiki_text[:5000]
 
-    system_prompt = f"""
+    prompt = f"""
     ### ROLE
     You are the core engine of a "Six Degrees of Separation" algorithm. Your goal is to find a factual path from "{subject_name}" to "{target_name}".
     
@@ -177,94 +201,63 @@ async def verify_relations(wiki_text: str, subject_name: str, target_name: str, 
     Analyze the "Candidate Links" and determine if they have a **factual, direct connection** to the "Current Subject".
     
     **RANKING INSTRUCTION:**
-    You MUST rank the valid candidates based on how likely they are to lead to the "Target Person" ("{target_name}").
-    - If the target is a politician, prioritize other politicians or world leaders.
-    - If the target is a musician, prioritize other musicians or producers.
-    - If no specific connection is obvious, prioritize the most famous/influential people (hubs).
+    Rank valid candidates based on how likely they are to lead to the "Target Person" ("{target_name}").
 
-    ### FILTERING RULES (STRICT - DIRECT CONNECTIONS ONLY)
-    1. **INCLUDE (Valid Connections):**
-       - **Direct Interaction:** People who have met, worked together, or had a significant public interaction with the subject.
-       - **Family & Partners:** Spouse, parents, children, siblings, partners.
-       - **Professional Associates:** Co-stars, co-founders, bandmates, direct rivals, coach/student.
-       - **Historical Interactions:** Signed a treaty with, battled against, succeeded/preceded in office (direct succession).
-    
-    2. **EXCLUDE (Invalid/Noise):**
-       - **Meta-pages (CRITICAL):** Do NOT extract "List of...", "Category:...", "Template:...", "User:...", "Talk:...".
-       - **Dates/Years:** Do not extract simple years (e.g., "2024") unless it's a specific event (e.g., "2024 Election").
-       - **Comparisons:** "He is often compared to [Person B]".
-       - **Inspirations (Passive):** "He was inspired by [Person D]" (unless they actually met).
-       - **Fictional Characters:** Do not extract characters played by the subject.
-       - **The Subject Themselves:** Do not include "{subject_name}" in the output.
-    
-    3. **BRIDGE DETECTION:**
-       - Mark as `is_bridge=true` ONLY if the person is a politician/leader AND they have a valid direct connection.
+    ### FILTERING RULES (STRICT)
+    1. INCLUDE: Family, professional associates, historical interactions
+    2. EXCLUDE: Meta-pages, dates, comparisons, inspirations, fictional characters
 
     ### OUTPUT FORMAT
-    Return ONLY valid JSON. The list `valid_candidates` MUST be sorted by relevance (most relevant first).
+    Return ONLY valid JSON. Sort valid_candidates by relevance (most relevant first).
     {{
         "valid_candidates": [
             {{
                 "name": "Exact Name from List",
-                "type": "Brief reason (e.g., 'Co-star', 'Spouse', 'Met at summit')",
+                "type": "Brief reason",
                 "is_bridge": true/false
             }}
         ]
     }}
     """
-    
-    retries = 0
-    max_retries = 5
-    
-    while retries < max_retries:
-        try:
-            model = genai.GenerativeModel('gemini-flash-latest')
-            response = await model.generate_content_async(system_prompt)
-            
-            if not response.candidates or not response.candidates[0].content.parts:
-                print(f"LLM Warning: Empty response for {subject_name}. Finish reason: {response.candidates[0].finish_reason if response.candidates else 'Unknown'}")
-                return []
-                
-            text_response = response.text
-            
-            match = re.search(r'\{.*\}', text_response, re.DOTALL)
-            if match:
-                json_str = match.group(0)
-                data = json.loads(json_str)
-                return data.get("valid_candidates", [])
-            else:
-                # Fallback cleanup
-                if text_response.startswith("```json"): text_response = text_response[7:]
-                if text_response.startswith("```"): text_response = text_response[3:]
-                if text_response.endswith("```"): text_response = text_response[:-3]
-                
-                data = json.loads(text_response.strip())
-                return data.get("valid_candidates", [])
-                
-        except Exception as e:
-            if "429" in str(e) or "quota" in str(e).lower():
-                print(f"Rate limit hit during verification for {subject_name}. Rotating key and retrying...")
-                rotate_api_key()
-                await asyncio.sleep(1)
-                retries += 1
-            else:
-                print(f"Error verifying relations for {subject_name}: {e}")
-                return []
-    
-    print(f"Max retries exceeded for {subject_name} verification (tried all keys).")
-    return []
 
-# Alias for the new BFS engine
+    response_text = await call_llm_with_fallback(prompt, f"verify_relations({subject_name})")
+    
+    if not response_text:
+        return []
+    
+    try:
+        match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if match:
+            data = json.loads(match.group(0))
+            return data.get("valid_candidates", [])
+        
+        cleaned = response_text.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        
+        data = json.loads(cleaned)
+        return data.get("valid_candidates", [])
+        
+    except Exception as e:
+        print(f"[LLM_CLIENT] Error parsing verification response: {e}")
+        return []
+
+
+# Alias for compatibility
 verify_candidates_with_llm = verify_relations
+
 
 async def generate_relationship_context(person1: str, person2: str) -> str:
     """
     Generates a brief description of the relationship between two people.
+    Uses 2-layer fallback.
     """
     if not API_KEYS:
         return "Connected"
 
-    system_prompt = f"""
+    prompt = f"""
     ### TASK
     Explain the specific, factual connection between "{person1}" and "{person2}" in one short sentence.
     
@@ -277,28 +270,19 @@ async def generate_relationship_context(person1: str, person2: str) -> str:
     ### OUTPUT
     Return ONLY the sentence. No intro, no quotes.
     """
+
+    response_text = await call_llm_with_fallback(prompt, f"context({person1}->{person2})")
     
-    retries = 0
-    max_retries = 3
+    if response_text:
+        return response_text.strip()
     
-    while retries < max_retries:
-        try:
-            model = genai.GenerativeModel('gemini-flash-latest')
-            response = await model.generate_content_async(system_prompt)
-            
-            # Handle empty response gracefully
-            if not response.parts or len(response.parts) == 0:
-                return "Connected via Wikipedia links"
-            
-            return response.text.strip()
-        except Exception as e:
-            if "429" in str(e) or "quota" in str(e).lower():
-                print(f"Rate limit hit during context gen for {person1}-{person2}. Rotating key...")
-                rotate_api_key()
-                await asyncio.sleep(1)
-                retries += 1
-            else:
-                print(f"Error generating context: {e}")
-                return "Connected"
-                
-    return "Connected"
+    return "Connected via Wikipedia"
+
+
+# =============================================================================
+# INITIALIZATION
+# =============================================================================
+
+if API_KEYS:
+    print(f"[LLM_CLIENT] ✅ Initialized with {len(API_KEYS)} API keys and {len(MODELS)} model fallbacks")
+    print(f"[LLM_CLIENT] 📋 Model hierarchy: {' → '.join(MODELS)}")
