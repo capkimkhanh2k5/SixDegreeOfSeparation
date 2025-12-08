@@ -48,12 +48,44 @@ function App() {
           if (line.trim()) {
             try {
               const data = JSON.parse(line);
+
               if (data.status === 'finished') {
-                setPath(data.path);
+                // PROGRESSIVE STREAMING: Set path immediately with null contexts
+                // The path_with_context has structure: [{node: {...}, edge_context: null/string}, ...]
+                const pathData = data.path_with_context || data.path;
+                setPath(pathData);
                 setLoading(false);
+                console.log('[PROGRESSIVE] Path received immediately!', pathData.length, 'nodes');
+
+              } else if (data.status === 'context_update') {
+                // PROGRESSIVE STREAMING: Update specific edge context
+                // Immutably update the path state
+                setPath(prevPath => {
+                  if (!prevPath) return prevPath;
+                  const newPath = [...prevPath];
+                  if (data.edge_index >= 0 && data.edge_index < newPath.length) {
+                    newPath[data.edge_index] = {
+                      ...newPath[data.edge_index],
+                      edge_context: data.context
+                    };
+                  }
+                  return newPath;
+                });
+                console.log(`[PROGRESSIVE] Context ${data.edge_index + 1} updated:`, data.context?.substring(0, 50) + '...');
+
+              } else if (data.status === 'heartbeat') {
+                // Heartbeat - keep connection alive, optionally log
+                console.log(`[HEARTBEAT] ${data.time}s - ${data.message || 'alive'}`);
+                window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
+
+              } else if (data.status === 'exploring') {
+                // BFS exploration update
+                window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
+
               } else if (data.status === 'error') {
                 setError(data.message);
                 setLoading(false);
+
               } else if (data.status === 'info' || data.status === 'visiting') {
                 window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
               }
