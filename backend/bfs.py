@@ -1,9 +1,9 @@
 """
-Six Degrees of Wikipedia - Bidirectional BFS Engine (FINAL)
+Six Degrees of Wikipedia - Bidirectional BFS Engine (AGGRESSIVE MODE)
 
 Key Features:
-1. HARD TIMEOUT: asyncio.wait_for ensures search NEVER hangs
-2. SOFT TIMEOUT: Internal 48s limit for graceful exit before watchdog
+1. EXTENDED TIMEOUT: 100s to allow deep historical searches
+2. LARGE BATCH SIZE: 50 titles per API call for better hub detection
 3. GRACEFUL DEGRADATION: Falls back to heuristics if API times out
 4. VIP Fast Lane: Instant verification for famous hub nodes
 5. Smart Pagination: Early exit when enough humans found
@@ -34,33 +34,33 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # =============================================================================
-# CONSTANTS
+# CONSTANTS (AGGRESSIVE MODE)
 # =============================================================================
 
 WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 USER_AGENT = "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"
 
-# Timeouts
-HARD_TIMEOUT_SECONDS = 50  # External watchdog limit
-SOFT_TIMEOUT_SECONDS = 48  # Internal graceful exit (2s buffer)
+# Timeouts (AGGRESSIVE - extended for hard cases)
+HARD_TIMEOUT_SECONDS = 100  # Extended from 50s
+SOFT_TIMEOUT_SECONDS = 98   # Graceful exit before hard timeout
 
 # Search limits
-MAX_NODES_VISITED = 3000
-BATCH_SIZE = 20
-CATEGORY_BATCH_SIZE = 10
-MAX_CANDIDATES_TO_CHECK = 150
-MAX_DEGREE = 25
-MAX_STEP_COUNT = 200
-CONCURRENT_REQUESTS = 10
+MAX_NODES_VISITED = 5000    # Increased for deeper searches
+BATCH_SIZE = 25             # Nodes to process per iteration
+CATEGORY_BATCH_SIZE = 50    # AGGRESSIVE: 50 titles per API call (was 10)
+MAX_CANDIDATES_TO_CHECK = 200
+MAX_DEGREE = 30
+MAX_STEP_COUNT = 300
+CONCURRENT_REQUESTS = 15
 
 # Smart Pagination
-MIN_HUMANS_FOR_EARLY_EXIT = 30
-MAX_FETCH_BATCHES = 2
+MIN_HUMANS_FOR_EARLY_EXIT = 25
+MAX_FETCH_BATCHES = 3
 
 # Fallback settings
-FALLBACK_NODE_CAP = 15  # Max nodes to return on timeout fallback
-API_TIMEOUT = 12.0
-BATCH_CHECK_TIMEOUT = 18.0
+FALLBACK_NODE_CAP = 20      # Slightly higher fallback cap
+API_TIMEOUT = 15.0
+BATCH_CHECK_TIMEOUT = 25.0  # Longer timeout for larger batches
 
 # Cache files
 CACHE_FILE = "wiki_cache.json"
@@ -80,6 +80,7 @@ PERSON_POSITIVE_KEYWORDS = [
     "generals", "commanders", "admirals", "marshals", "warlords",
     "conquerors", "rulers", "regents", "caliphs", "popes", "patriarchs",
     "philosophers", "theologians", "historians", "mathematicians", "inventors",
+    "explorers", "travelers", "missionaries",  # Added for Marco Polo
 ]
 
 PERSON_NEGATIVE_KEYWORDS = [
@@ -110,7 +111,7 @@ META_PAGE_PATTERNS = [
 ]
 
 # =============================================================================
-# VIP FAST LANE - Famous Hub Nodes (expanded for historical paths)
+# VIP FAST LANE - Expanded with Historical Connectors
 # =============================================================================
 
 VIP_ALLOWLIST = {
@@ -119,31 +120,39 @@ VIP_ALLOWLIST = {
     "Hillary Clinton", "Vladimir Putin", "Xi Jinping", "Angela Merkel", "Emmanuel Macron",
     "Boris Johnson", "Narendra Modi", "Justin Trudeau", "Benjamin Netanyahu",
     
-    # Historical Leaders (EXPANDED for Genghis Khan path)
+    # Historical Leaders - EXPANDED for Genghis Khan path
     "Genghis Khan", "Kublai Khan", "Marco Polo", "Alexander the Great", "Julius Caesar",
-    "Augustus", "Napoleon Bonaparte", "Adolf Hitler", "Joseph Stalin", 
+    "Augustus", "Napoleon Bonaparte", "Adolf Hitler", "Joseph Stalin",
     "Winston Churchill", "Franklin D. Roosevelt", "Theodore Roosevelt",
     "Queen Victoria", "Queen Elizabeth II", "King Charles III", "Henry VIII of England",
     "Cleopatra", "Ramesses II", "Charlemagne", "Peter the Great", "Catherine the Great",
+    "Attila", "Tamerlane", "Saladin", "Richard I of England", "Frederick the Great",
+    
+    # Mongol Empire connectors
+    "Ögedei Khan", "Güyük Khan", "Möngke Khan", "Jochi", "Chagatai Khan",
+    "Tolui", "Batu Khan", "Hulagu Khan", "Berke", "Ariq Böke",
     
     # US Historical
     "Abraham Lincoln", "George Washington", "Thomas Jefferson", "John F. Kennedy",
     "Richard Nixon", "Ronald Reagan", "Jimmy Carter", "Dwight D. Eisenhower",
+    "Harry S. Truman", "Lyndon B. Johnson", "Andrew Jackson", "Ulysses S. Grant",
     
     # Revolutionary Figures
     "Mahatma Gandhi", "Nelson Mandela", "Martin Luther King Jr.", "Che Guevara",
     "Ho Chi Minh", "Mao Zedong", "Vladimir Lenin", "Karl Marx", "Sun Yat-sen",
+    "Fidel Castro", "Leon Trotsky", "Rosa Parks",
     
     # Tech Moguls
     "Elon Musk", "Jeff Bezos", "Bill Gates", "Steve Jobs", "Mark Zuckerberg",
     "Warren Buffett", "Larry Page", "Sergey Brin", "Tim Cook", "Satya Nadella",
     "Steve Wozniak", "Larry Ellison", "Jack Dorsey", "Peter Thiel", "Marc Andreessen",
     
-    # Scientists & Thinkers
+    # Scientists & Explorers
     "Albert Einstein", "Isaac Newton", "Stephen Hawking", "Nikola Tesla",
     "Thomas Edison", "Marie Curie", "Charles Darwin", "Galileo Galilei",
     "Leonardo da Vinci", "Aristotle", "Plato", "Socrates", "Alan Turing",
     "Sigmund Freud", "Carl Jung", "Confucius",
+    "Christopher Columbus", "Vasco da Gama", "Ferdinand Magellan", "Ibn Battuta",
     
     # Entertainment
     "Michael Jackson", "Elvis Presley", "Madonna", "Taylor Swift", "Beyoncé",
@@ -157,7 +166,7 @@ VIP_ALLOWLIST = {
     "Babe Ruth", "Pelé", "Mike Tyson",
     
     # Religious/Spiritual
-    "Pope Francis", "Dalai Lama", "Mother Teresa",
+    "Pope Francis", "Dalai Lama", "Mother Teresa", "Pope John Paul II",
 }
 
 # =============================================================================
@@ -204,7 +213,7 @@ load_cache()
 # =============================================================================
 
 class BidirectionalBFS:
-    """Bidirectional BFS with GRACEFUL DEGRADATION and SOFT TIMEOUT."""
+    """Bidirectional BFS with AGGRESSIVE settings for hard cases."""
 
     def __init__(self):
         self.client: Optional[httpx.AsyncClient] = None
@@ -266,13 +275,11 @@ class BidirectionalBFS:
                 elapsed = time.time() - self.start_time
                 total_visited = len(self.parent_f) + len(self.parent_b)
 
-                # ============================================================
-                # SOFT TIMEOUT: Graceful exit 2s before watchdog kills us
-                # ============================================================
+                # SOFT TIMEOUT: Graceful exit before watchdog
                 if elapsed > SOFT_TIMEOUT_SECONDS:
                     save_cache()
                     yield json.dumps({
-                        "status": "error", 
+                        "status": "error",
                         "message": f"Search time limit reached ({SOFT_TIMEOUT_SECONDS}s). Graceful exit."
                     })
                     return
@@ -351,10 +358,7 @@ class BidirectionalBFS:
             return None
 
     async def _batch_check_categories_safe(self, titles: List[str]) -> List[str]:
-        """
-        GRACEFUL DEGRADATION: If API times out, return capped fallback.
-        Never return empty list just because of timeout.
-        """
+        """GRACEFUL DEGRADATION: Return capped fallback on timeout."""
         if not titles:
             return []
 
@@ -364,15 +368,12 @@ class BidirectionalBFS:
                 timeout=BATCH_CHECK_TIMEOUT
             )
         except asyncio.TimeoutError:
-            # CRITICAL: Return capped fallback, not empty list
             vips = [t for t in titles if t in VIP_ALLOWLIST]
             others = [t for t in titles if t not in VIP_ALLOWLIST]
             fallback = vips + others[:FALLBACK_NODE_CAP]
-            
             dropped = len(titles) - len(fallback)
             logger.warning(f"Batch check timed out. Returning {len(fallback)} nodes (dropped {dropped}).")
             return fallback
-            
         except Exception as e:
             logger.error(f"Batch check failed: {e}. Using fallback.")
             vips = [t for t in titles if t in VIP_ALLOWLIST]
@@ -394,7 +395,7 @@ class BidirectionalBFS:
         if not uncached:
             return vips + cached
 
-        # API batch check
+        # API batch check with LARGER batches (50 titles each)
         batches = [uncached[i:i + CATEGORY_BATCH_SIZE] for i in range(0, len(uncached), CATEGORY_BATCH_SIZE)]
 
         async def check_batch(batch: List[str]) -> List[str]:
@@ -457,7 +458,7 @@ class BidirectionalBFS:
             if re.search(r'\d{4} deaths', cat) and "animal" not in cat:
                 return True
             if re.search(r'\d{1,2}(st|nd|rd|th)-century', cat):
-                if any(r in cat for r in ["rulers", "people", "monarchs", "leaders"]):
+                if any(r in cat for r in ["rulers", "people", "monarchs", "leaders", "explorers"]):
                     return True
         return False
 

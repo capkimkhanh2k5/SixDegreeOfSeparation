@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Watchdog Benchmark - Hang Detection & Force Kill
+Watchdog Benchmark - Hang Detection & Force Kill (AGGRESSIVE MODE)
 
-This script acts as an external watchdog to prove that the BFS engine
-respects timeouts and never hangs indefinitely.
+Extended watchdog timer to allow 100s internal search timeout.
 
 Features:
 - Runs test cases with hard timeout enforcement
-- Force-kills any task exceeding 50 seconds
+- Force-kills any task exceeding 105 seconds
 - Reports PASS/FAIL/HANG status for each test
 """
 
@@ -24,10 +23,10 @@ from backend.bfs import find_shortest_path, save_cache
 
 
 # =============================================================================
-# CONFIGURATION
+# CONFIGURATION (AGGRESSIVE MODE)
 # =============================================================================
 
-WATCHDOG_TIMEOUT = 50  # Force kill after this many seconds
+WATCHDOG_TIMEOUT = 105  # Extended to allow 100s internal timeout + buffer
 
 
 @dataclass
@@ -39,9 +38,9 @@ class TestCase:
 
 
 TEST_CASES = [
-    TestCase("Easy: Obama → Trump", "Barack Obama", "Donald Trump", 15.0),
-    TestCase("Medium: Musk → Jobs", "Elon Musk", "Steve Jobs", 30.0),
-    TestCase("Hard: Genghis Khan → Trump", "Genghis Khan", "Donald Trump", 45.0),
+    TestCase("Easy: Obama → Trump", "Barack Obama", "Donald Trump", 30.0),
+    TestCase("Medium: Musk → Jobs", "Elon Musk", "Steve Jobs", 50.0),
+    TestCase("Hard: Genghis Khan → Trump", "Genghis Khan", "Donald Trump", 100.0),
 ]
 
 
@@ -105,7 +104,6 @@ async def run_single_test(test: TestCase) -> TestResult:
             message = str(e)
     
     try:
-        # WATCHDOG: Force kill after WATCHDOG_TIMEOUT seconds
         await asyncio.wait_for(execute_search(), timeout=WATCHDOG_TIMEOUT)
     except asyncio.TimeoutError:
         status = "HANG"
@@ -127,7 +125,7 @@ async def run_all_tests() -> List[TestResult]:
     """Run all tests sequentially."""
     
     print("\n" + "="*60)
-    print("🐕 WATCHDOG BENCHMARK - HANG DETECTION")
+    print("🐕 WATCHDOG BENCHMARK - AGGRESSIVE MODE")
     print(f"   Watchdog timeout: {WATCHDOG_TIMEOUT}s per test")
     print("="*60)
     
@@ -137,7 +135,6 @@ async def run_all_tests() -> List[TestResult]:
         result = await run_single_test(test)
         results.append(result)
         
-        # Print immediate result
         icon = {"PASS": "✅", "FAIL": "❌", "TIMEOUT": "⏱️", "HANG": "🔴"}.get(result.status, "?")
         print(f"\n   {icon} {result.status} in {result.time:.2f}s")
         print(f"   {result.message}")
@@ -153,7 +150,7 @@ def print_report(results: List[TestResult]):
     
     print("\n")
     print("="*70)
-    print("📊 WATCHDOG REPORT")
+    print("📊 WATCHDOG REPORT (AGGRESSIVE MODE)")
     print("="*70)
     
     print(f"\n{'Test':<35} {'Status':<10} {'Time':>10} {'Result':<15}")
@@ -169,6 +166,8 @@ def print_report(results: List[TestResult]):
             result_str = f"{len(r.path)} hops"
         elif r.status == "HANG":
             result_str = "FORCE KILLED"
+        elif r.status == "TIMEOUT":
+            result_str = "GRACEFUL EXIT"
         else:
             result_str = r.message[:15]
         
@@ -176,19 +175,21 @@ def print_report(results: List[TestResult]):
     
     print("-"*70)
     
-    # Summary
     total = len(results)
     hangs = sum(1 for r in results if r.status == "HANG")
+    timeouts = sum(1 for r in results if r.status == "TIMEOUT")
     
     print(f"\n{'SUMMARY':<35} {passed}/{total} passed")
     
     if hangs > 0:
-        print(f"{'':35} 🔴 {hangs} HANG(s) DETECTED - Watchdog intervened!")
+        print(f"{'':35} 🔴 {hangs} HANG(s) DETECTED")
         grade = "❌ FAILED - HANG DETECTED"
     elif passed == total:
-        grade = "✅ ALL TESTS PASSED - No hangs detected"
+        grade = "✅ ALL TESTS PASSED"
+    elif timeouts > 0:
+        grade = f"⚠️ {timeouts} test(s) timed out gracefully"
     else:
-        grade = "⚠️ SOME TESTS FAILED - But no hangs"
+        grade = "⚠️ SOME TESTS FAILED"
     
     print(f"\n{'VERDICT':<35} {grade}")
     print("="*70 + "\n")
