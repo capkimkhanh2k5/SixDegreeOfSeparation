@@ -21,81 +21,124 @@ function App() {
     setPath(null);
     setError(null);
 
-    // Determine WebSocket URL based on current location
+    // Try WebSocket first for real-time updates
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsHost = window.location.host;
     const wsUrl = `${wsProtocol}//${wsHost}/ws/search`;
 
-    console.log('[WS] Connecting to:', wsUrl);
+    console.log('[WS] Attempting connection to:', wsUrl);
 
+    let wsConnected = false;
     const ws = new WebSocket(wsUrl);
 
+    // Set a timeout for WebSocket connection
+    const wsTimeout = setTimeout(() => {
+      if (!wsConnected) {
+        console.log('[WS] Connection timeout, falling back to HTTP...');
+        ws.close();
+        fallbackToFetch();
+      }
+    }, 3000); // 3 second timeout
+
     ws.onopen = () => {
-      console.log('[WS] Connected, sending search request...');
+      wsConnected = true;
+      clearTimeout(wsTimeout);
+      console.log('[WS] Connected! Sending search request...');
       ws.send(JSON.stringify({ start: startPage, end: endPage }));
     };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        console.log('[WS] Received:', data.status, data.nodes?.[0] || data.message || '');
-
-        if (data.status === 'finished') {
-          // PROGRESSIVE STREAMING: Set path immediately
-          const pathData = data.path_with_context || data.path;
-          setPath(pathData);
-          setLoading(false);
-          console.log('[WS] Path received!', pathData.length, 'nodes');
-
-        } else if (data.status === 'context_update') {
-          // Update specific edge context
-          setPath(prevPath => {
-            if (!prevPath) return prevPath;
-            const newPath = [...prevPath];
-            if (data.edge_index >= 0 && data.edge_index < newPath.length) {
-              newPath[data.edge_index] = {
-                ...newPath[data.edge_index],
-                edge_context: data.context
-              };
-            }
-            return newPath;
-          });
-          console.log(`[WS] Context ${data.edge_index + 1} updated`);
-
-        } else if (data.status === 'exploring') {
-          // Real-time exploration update - dispatch IMMEDIATELY
-          console.log('[WS][EXPLORING]', data.direction, data.nodes?.[0], 'visited:', data.stats?.visited);
-          window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
-
-        } else if (data.status === 'heartbeat') {
-          console.log(`[WS][HEARTBEAT] ${data.time}s`);
-          window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
-
-        } else if (data.status === 'error') {
-          setError(data.message);
-          setLoading(false);
-          ws.close();
-
-        } else if (data.status === 'info') {
-          console.log('[WS][INFO]', data.message);
-          window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
-        }
+        handleMessage(data);
       } catch (e) {
         console.error('[WS] Error parsing message:', e);
       }
     };
 
     ws.onerror = (error) => {
-      console.error('[WS] Connection error:', error);
-      setError("WebSocket connection failed. Please check if backend is running.");
-      setLoading(false);
+      console.error('[WS] Connection error, falling back to HTTP...', error);
+      clearTimeout(wsTimeout);
+      if (!wsConnected) {
+        fallbackToFetch();
+      }
     };
 
     ws.onclose = (event) => {
-      console.log('[WS] Connection closed:', event.code, event.reason);
-      if (event.code !== 1000 && loading) {
-        // Abnormal close while still loading
-        setError("Connection lost. Search may be incomplete.");
+      console.log('[WS] Connection closed:', event.code);
+    };
+
+    // Shared message handler
+    const handleMessage = (data) => {
+      console.log('[MSG]', data.status, data.nodes?.[0] || data.message || '');
+
+      if (data.status === 'finished') {
+        const pathData = data.path_with_context || data.path;
+        setPath(pathData);
+        setLoading(false);
+        console.log('[MSG] Path received!', pathData.length, 'nodes');
+
+      } else if (data.status === 'context_update') {
+        setPath(prevPath => {
+          if (!prevPath) return prevPath;
+          const newPath = [...prevPath];
+          if (data.edge_index >= 0 && data.edge_index < newPath.length) {
+            newPath[data.edge_index] = {
+              ...newPath[data.edge_index],
+              edge_context: data.context
+            };
+          }
+          return newPath;
+        });
+
+      } else if (data.status === 'exploring') {
+        window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
+
+      } else if (data.status === 'heartbeat' || data.status === 'info') {
+        window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
+
+      } else if (data.status === 'error') {
+        setError(data.message);
+        setLoading(false);
+      }
+    };
+
+    // Fallback to HTTP fetch-based streaming
+    const fallbackToFetch = async () => {
+      console.log('[HTTP] Using fetch fallback...');
+      try {
+        const response = await fetch('/api/shortest-path', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ start_page: startPage, end_page: endPage }),
+        });
+
+        if (!response.ok) throw new Error('Network response was not ok');
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+
+          for (const line of lines) {
+            if (line.trim()) {
+              try {
+                const data = JSON.parse(line);
+                handleMessage(data);
+              } catch (e) {
+                console.error('[HTTP] Error parsing JSON:', e);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('[HTTP] Error:', error);
+        setError("Connection failed. Please check if backend is running.");
         setLoading(false);
       }
     };

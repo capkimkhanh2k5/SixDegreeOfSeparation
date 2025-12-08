@@ -4,3 +4,4 @@ httpx
 google-generativeai
 python-dotenv
 pydantic
+websockets
