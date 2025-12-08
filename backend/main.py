@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from .bfs import find_shortest_path
 from .text_utils import smart_name_search, resolve_wikipedia_name
+from .llm_client import generate_relationship_context
 
 load_dotenv()
 
@@ -158,8 +159,13 @@ async def search_wikipedia(q: str = Query(..., min_length=1)):
                 "photograph", "painting", "sculpture", "organization", "company"
             ]
             
-            # Title exclusion patterns
-            title_exclude_patterns = ["(photo)", "(film)", "(song)", "(book)", "(place)", "(band)", "(album)", "(city)", "(planet)"]
+            # Title exclusion patterns (STRICT)
+            title_exclude_patterns = [
+                "(photo)", "(film)", "(song)", "(book)", "(place)", "(band)", "(album)", 
+                "(city)", "(planet)", "(fashion)", "(company)", "(organization)",
+                "(disambiguation)", "(tv series)", "(magazine)", "template:", "category:",
+                "in popular culture", "in fashion", "in film", "in music"
+            ]
 
             for page in pages_list:
                 title = page.get("title")
