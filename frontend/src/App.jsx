@@ -14,131 +14,102 @@ function App() {
   const [error, setError] = useState(null);
   // Removed 'view' state as we now use conditional rendering based on data
 
-  const handleSearch = async () => {
+  const handleSearch = () => {
     if (!startPage || !endPage) return;
 
     setLoading(true);
     setPath(null);
     setError(null);
 
-    // Try WebSocket first for real-time updates
+    // Build WebSocket URL dynamically
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsHost = window.location.host;
     const wsUrl = `${wsProtocol}//${wsHost}/ws/search`;
 
-    console.log('[WS] Attempting connection to:', wsUrl);
+    console.log('[WS] 🔌 Connecting to:', wsUrl);
 
-    let wsConnected = false;
     const ws = new WebSocket(wsUrl);
 
-    // Set a timeout for WebSocket connection
-    const wsTimeout = setTimeout(() => {
-      if (!wsConnected) {
-        console.log('[WS] Connection timeout, falling back to HTTP...');
-        ws.close();
-        fallbackToFetch();
-      }
-    }, 3000); // 3 second timeout
-
     ws.onopen = () => {
-      wsConnected = true;
-      clearTimeout(wsTimeout);
-      console.log('[WS] Connected! Sending search request...');
+      console.log('[WS] ✅ Connected! Sending search request...');
       ws.send(JSON.stringify({ start: startPage, end: endPage }));
     };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        handleMessage(data);
+
+        // Log every message for debugging
+        console.log('[WS] 📨', data.status, data.nodes?.[0] || data.message || '');
+
+        switch (data.status) {
+          case 'exploring':
+            // REAL-TIME UPDATE: Dispatch immediately to StatusConsole
+            window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
+            break;
+
+          case 'heartbeat':
+            // Heartbeat - keep alive indicator
+            window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
+            break;
+
+          case 'info':
+            // Info messages (like "Searching: X ↔ Y")
+            window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
+            break;
+
+          case 'finished':
+            // Path found! Set path and stop loading
+            const pathData = data.path_with_context || data.path;
+            setPath(pathData);
+            setLoading(false);
+            console.log('[WS] 🎯 Path found!', pathData.length, 'nodes');
+            // Also dispatch to log
+            window.dispatchEvent(new CustomEvent('bfs-log', {
+              detail: { status: 'finished', message: `Found path with ${pathData.length} nodes!` }
+            }));
+            break;
+
+          case 'context_update':
+            // Progressive context update
+            setPath(prevPath => {
+              if (!prevPath) return prevPath;
+              const newPath = [...prevPath];
+              if (data.edge_index >= 0 && data.edge_index < newPath.length) {
+                newPath[data.edge_index] = {
+                  ...newPath[data.edge_index],
+                  edge_context: data.context
+                };
+              }
+              return newPath;
+            });
+            break;
+
+          case 'error':
+            setError(data.message);
+            setLoading(false);
+            ws.close();
+            break;
+
+          default:
+            console.log('[WS] Unknown status:', data.status);
+        }
       } catch (e) {
-        console.error('[WS] Error parsing message:', e);
+        console.error('[WS] ❌ Parse error:', e);
       }
     };
 
     ws.onerror = (error) => {
-      console.error('[WS] Connection error, falling back to HTTP...', error);
-      clearTimeout(wsTimeout);
-      if (!wsConnected) {
-        fallbackToFetch();
-      }
+      console.error('[WS] ❌ Connection error:', error);
+      setError("WebSocket connection failed. Please restart the backend with 'pip install websockets' and try again.");
+      setLoading(false);
     };
 
     ws.onclose = (event) => {
-      console.log('[WS] Connection closed:', event.code);
-    };
-
-    // Shared message handler
-    const handleMessage = (data) => {
-      console.log('[MSG]', data.status, data.nodes?.[0] || data.message || '');
-
-      if (data.status === 'finished') {
-        const pathData = data.path_with_context || data.path;
-        setPath(pathData);
-        setLoading(false);
-        console.log('[MSG] Path received!', pathData.length, 'nodes');
-
-      } else if (data.status === 'context_update') {
-        setPath(prevPath => {
-          if (!prevPath) return prevPath;
-          const newPath = [...prevPath];
-          if (data.edge_index >= 0 && data.edge_index < newPath.length) {
-            newPath[data.edge_index] = {
-              ...newPath[data.edge_index],
-              edge_context: data.context
-            };
-          }
-          return newPath;
-        });
-
-      } else if (data.status === 'exploring') {
-        window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
-
-      } else if (data.status === 'heartbeat' || data.status === 'info') {
-        window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
-
-      } else if (data.status === 'error') {
-        setError(data.message);
-        setLoading(false);
-      }
-    };
-
-    // Fallback to HTTP fetch-based streaming
-    const fallbackToFetch = async () => {
-      console.log('[HTTP] Using fetch fallback...');
-      try {
-        const response = await fetch('/api/shortest-path', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ start_page: startPage, end_page: endPage }),
-        });
-
-        if (!response.ok) throw new Error('Network response was not ok');
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
-
-          for (const line of lines) {
-            if (line.trim()) {
-              try {
-                const data = JSON.parse(line);
-                handleMessage(data);
-              } catch (e) {
-                console.error('[HTTP] Error parsing JSON:', e);
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error('[HTTP] Error:', error);
-        setError("Connection failed. Please check if backend is running.");
+      console.log('[WS] 🔌 Connection closed:', event.code);
+      // Only show error if closed abnormally while still loading
+      if (event.code !== 1000 && event.code !== 1005 && loading) {
+        setError("Connection closed unexpectedly.");
         setLoading(false);
       }
     };
