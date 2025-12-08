@@ -1,12 +1,12 @@
 """
-Six Degrees of Wikipedia - Bidirectional BFS Engine
+Six Degrees of Wikipedia - Bidirectional BFS Engine (FINAL)
 
 Key Features:
 1. HARD TIMEOUT: asyncio.wait_for ensures search NEVER hangs
-2. GRACEFUL DEGRADATION: Falls back to heuristics if API times out
-3. Smart Pagination: Early exit when enough humans found
+2. SOFT TIMEOUT: Internal 48s limit for graceful exit before watchdog
+3. GRACEFUL DEGRADATION: Falls back to heuristics if API times out
 4. VIP Fast Lane: Instant verification for famous hub nodes
-5. Strict Noise Filtering: Rejects tech/product articles
+5. Smart Pagination: Early exit when enough humans found
 
 Author: capkimkhanh2k5
 License: MIT
@@ -40,8 +40,9 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 USER_AGENT = "SixDegreesOfWikipedia/2.0 (capkimkhanh2k5@gmail.com)"
 
-# Global hard timeout (matches benchmark watchdog)
-HARD_TIMEOUT_SECONDS = 50
+# Timeouts
+HARD_TIMEOUT_SECONDS = 50  # External watchdog limit
+SOFT_TIMEOUT_SECONDS = 48  # Internal graceful exit (2s buffer)
 
 # Search limits
 MAX_NODES_VISITED = 3000
@@ -56,9 +57,10 @@ CONCURRENT_REQUESTS = 10
 MIN_HUMANS_FOR_EARLY_EXIT = 30
 MAX_FETCH_BATCHES = 2
 
-# API timeouts (generous to avoid false timeouts)
+# Fallback settings
+FALLBACK_NODE_CAP = 15  # Max nodes to return on timeout fallback
 API_TIMEOUT = 12.0
-BATCH_CHECK_TIMEOUT = 20.0
+BATCH_CHECK_TIMEOUT = 18.0
 
 # Cache files
 CACHE_FILE = "wiki_cache.json"
@@ -108,37 +110,54 @@ META_PAGE_PATTERNS = [
 ]
 
 # =============================================================================
-# VIP FAST LANE
+# VIP FAST LANE - Famous Hub Nodes (expanded for historical paths)
 # =============================================================================
 
 VIP_ALLOWLIST = {
-    # Leaders
+    # Modern World Leaders
     "Donald Trump", "Joe Biden", "Barack Obama", "George W. Bush", "Bill Clinton",
     "Hillary Clinton", "Vladimir Putin", "Xi Jinping", "Angela Merkel", "Emmanuel Macron",
     "Boris Johnson", "Narendra Modi", "Justin Trudeau", "Benjamin Netanyahu",
-    # Historical
-    "Genghis Khan", "Kublai Khan", "Alexander the Great", "Julius Caesar", "Augustus",
-    "Napoleon Bonaparte", "Adolf Hitler", "Joseph Stalin", "Winston Churchill",
-    "Franklin D. Roosevelt", "Queen Victoria", "Queen Elizabeth II", "King Charles III",
-    "Cleopatra", "Abraham Lincoln", "George Washington", "Thomas Jefferson",
-    # Revolutionary
+    
+    # Historical Leaders (EXPANDED for Genghis Khan path)
+    "Genghis Khan", "Kublai Khan", "Marco Polo", "Alexander the Great", "Julius Caesar",
+    "Augustus", "Napoleon Bonaparte", "Adolf Hitler", "Joseph Stalin", 
+    "Winston Churchill", "Franklin D. Roosevelt", "Theodore Roosevelt",
+    "Queen Victoria", "Queen Elizabeth II", "King Charles III", "Henry VIII of England",
+    "Cleopatra", "Ramesses II", "Charlemagne", "Peter the Great", "Catherine the Great",
+    
+    # US Historical
+    "Abraham Lincoln", "George Washington", "Thomas Jefferson", "John F. Kennedy",
+    "Richard Nixon", "Ronald Reagan", "Jimmy Carter", "Dwight D. Eisenhower",
+    
+    # Revolutionary Figures
     "Mahatma Gandhi", "Nelson Mandela", "Martin Luther King Jr.", "Che Guevara",
-    "Ho Chi Minh", "Mao Zedong", "Vladimir Lenin", "Karl Marx",
-    # Tech
+    "Ho Chi Minh", "Mao Zedong", "Vladimir Lenin", "Karl Marx", "Sun Yat-sen",
+    
+    # Tech Moguls
     "Elon Musk", "Jeff Bezos", "Bill Gates", "Steve Jobs", "Mark Zuckerberg",
     "Warren Buffett", "Larry Page", "Sergey Brin", "Tim Cook", "Satya Nadella",
     "Steve Wozniak", "Larry Ellison", "Jack Dorsey", "Peter Thiel", "Marc Andreessen",
-    # Scientists
+    
+    # Scientists & Thinkers
     "Albert Einstein", "Isaac Newton", "Stephen Hawking", "Nikola Tesla",
     "Thomas Edison", "Marie Curie", "Charles Darwin", "Galileo Galilei",
-    "Leonardo da Vinci", "Aristotle", "Plato", "Alan Turing",
+    "Leonardo da Vinci", "Aristotle", "Plato", "Socrates", "Alan Turing",
+    "Sigmund Freud", "Carl Jung", "Confucius",
+    
     # Entertainment
     "Michael Jackson", "Elvis Presley", "Madonna", "Taylor Swift", "Beyoncé",
     "Leonardo DiCaprio", "Tom Hanks", "Brad Pitt", "Angelina Jolie",
     "Kanye West", "Oprah Winfrey", "Tom Cruise", "Will Smith",
+    "Marilyn Monroe", "Audrey Hepburn", "Walt Disney",
+    
     # Sports
     "Michael Jordan", "LeBron James", "Cristiano Ronaldo", "Lionel Messi",
     "Muhammad Ali", "Tiger Woods", "Serena Williams", "Roger Federer",
+    "Babe Ruth", "Pelé", "Mike Tyson",
+    
+    # Religious/Spiritual
+    "Pope Francis", "Dalai Lama", "Mother Teresa",
 }
 
 # =============================================================================
@@ -185,7 +204,7 @@ load_cache()
 # =============================================================================
 
 class BidirectionalBFS:
-    """Bidirectional BFS with GRACEFUL DEGRADATION on timeout."""
+    """Bidirectional BFS with GRACEFUL DEGRADATION and SOFT TIMEOUT."""
 
     def __init__(self):
         self.client: Optional[httpx.AsyncClient] = None
@@ -247,9 +266,15 @@ class BidirectionalBFS:
                 elapsed = time.time() - self.start_time
                 total_visited = len(self.parent_f) + len(self.parent_b)
 
-                if elapsed > HARD_TIMEOUT_SECONDS - 5:
+                # ============================================================
+                # SOFT TIMEOUT: Graceful exit 2s before watchdog kills us
+                # ============================================================
+                if elapsed > SOFT_TIMEOUT_SECONDS:
                     save_cache()
-                    yield json.dumps({"status": "error", "message": "Approaching timeout"})
+                    yield json.dumps({
+                        "status": "error", 
+                        "message": f"Search time limit reached ({SOFT_TIMEOUT_SECONDS}s). Graceful exit."
+                    })
                     return
 
                 if total_visited > MAX_NODES_VISITED:
@@ -311,11 +336,9 @@ class BidirectionalBFS:
                 else:
                     candidates = await self._get_backlinks(current_node)
 
-                # Heuristic filter first
                 filtered = self._heuristic_filter(candidates)
                 random.shuffle(filtered)
 
-                # Try category check with GRACEFUL DEGRADATION
                 to_check = filtered[:MAX_CANDIDATES_TO_CHECK]
                 humans = await self._batch_check_categories_safe(to_check)
 
@@ -329,7 +352,7 @@ class BidirectionalBFS:
 
     async def _batch_check_categories_safe(self, titles: List[str]) -> List[str]:
         """
-        GRACEFUL DEGRADATION: If API times out, return heuristic-filtered titles.
+        GRACEFUL DEGRADATION: If API times out, return capped fallback.
         Never return empty list just because of timeout.
         """
         if not titles:
@@ -341,21 +364,20 @@ class BidirectionalBFS:
                 timeout=BATCH_CHECK_TIMEOUT
             )
         except asyncio.TimeoutError:
-            # CRITICAL: Do NOT discard candidates on timeout
-            # Fallback to VIP + heuristic filtering
-            logger.warning(f"Batch check timed out. Falling back to heuristics for {len(titles)} nodes.")
-            
-            # Return VIPs + a sample of other candidates
+            # CRITICAL: Return capped fallback, not empty list
             vips = [t for t in titles if t in VIP_ALLOWLIST]
             others = [t for t in titles if t not in VIP_ALLOWLIST]
+            fallback = vips + others[:FALLBACK_NODE_CAP]
             
-            # Take first 15 non-VIP candidates as fallback
-            return vips + others[:15]
+            dropped = len(titles) - len(fallback)
+            logger.warning(f"Batch check timed out. Returning {len(fallback)} nodes (dropped {dropped}).")
+            return fallback
+            
         except Exception as e:
-            logger.error(f"Batch check failed: {e}. Using heuristic fallback.")
+            logger.error(f"Batch check failed: {e}. Using fallback.")
             vips = [t for t in titles if t in VIP_ALLOWLIST]
             others = [t for t in titles if t not in VIP_ALLOWLIST]
-            return vips + others[:15]
+            return vips + others[:FALLBACK_NODE_CAP]
 
     async def _batch_check_categories(self, titles: List[str]) -> List[str]:
         """Check if articles are about humans via API."""
@@ -389,7 +411,7 @@ class BidirectionalBFS:
                     )
 
                 if resp.status_code != 200:
-                    return batch  # Fallback: return input on error
+                    return []
 
                 humans = []
                 for page in resp.json().get("query", {}).get("pages", {}).values():
@@ -408,7 +430,7 @@ class BidirectionalBFS:
 
                 return humans
             except Exception:
-                return batch[:5]  # Fallback: return subset on error
+                return []
 
         results = await asyncio.gather(*[check_batch(b) for b in batches], return_exceptions=True)
         api_humans = []
@@ -449,7 +471,6 @@ class BidirectionalBFS:
         headers = {"User-Agent": USER_AGENT}
 
         try:
-            # Text
             resp = await self.client.get(
                 WIKIPEDIA_API_URL,
                 params={"action": "query", "format": "json", "titles": title,
@@ -460,7 +481,6 @@ class BidirectionalBFS:
             for p in resp.json().get("query", {}).get("pages", {}).values():
                 text = p.get("extract", "")
 
-            # Links with smart pagination
             params = {"action": "query", "format": "json", "titles": title,
                       "prop": "links", "plnamespace": 0, "pllimit": "max"}
 
