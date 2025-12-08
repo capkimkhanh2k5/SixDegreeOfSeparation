@@ -272,37 +272,49 @@ const StatusConsole = ({ loading }) => {
     const [logs, setLogs] = useState([]);
     const logsEndRef = useRef(null);
     const containerRef = useRef(null);
+    const wasLoadingRef = useRef(false);
 
+    // Reset logs when loading starts (transition from false to true)
     useEffect(() => {
-        if (loading) {
-            setLogs([]); // Reset logs on new search
-
-            const handleLog = (event) => {
-                const rawData = event.detail;
-                const now = new Date();
-                const timeString = now.toLocaleTimeString('en-US', {
-                    hour12: false,
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit'
-                });
-
-                const parsed = parseLogData(rawData);
-
-                setLogs(prev => [...prev, {
-                    time: timeString,
-                    parsed,
-                    id: Date.now() + Math.random()
-                }]);
-            };
-
-            window.addEventListener('bfs-log', handleLog);
-
-            return () => {
-                window.removeEventListener('bfs-log', handleLog);
-            };
+        if (loading && !wasLoadingRef.current) {
+            // Loading just started - reset logs
+            setLogs([]);
+            console.log('[StatusConsole] Loading started, logs reset');
         }
+        wasLoadingRef.current = loading;
     }, [loading]);
+
+    // ALWAYS listen for events (not conditional on loading)
+    useEffect(() => {
+        const handleLog = (event) => {
+            const rawData = event.detail;
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('en-US', {
+                hour12: false,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+
+            const parsed = parseLogData(rawData);
+            console.log('[StatusConsole] Received event:', parsed.status, parsed.nodes?.[0] || parsed.message);
+
+            setLogs(prev => [...prev, {
+                time: timeString,
+                parsed,
+                id: Date.now() + Math.random()
+            }]);
+        };
+
+        // Attach listener immediately on mount
+        window.addEventListener('bfs-log', handleLog);
+        console.log('[StatusConsole] Event listener attached');
+
+        return () => {
+            window.removeEventListener('bfs-log', handleLog);
+            console.log('[StatusConsole] Event listener removed');
+        };
+    }, []); // Empty deps - only run once on mount
 
     // Auto-scroll to bottom
     useEffect(() => {

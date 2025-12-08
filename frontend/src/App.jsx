@@ -79,7 +79,8 @@ function App() {
                 window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
 
               } else if (data.status === 'exploring') {
-                // BFS exploration update
+                // BFS exploration update - dispatch to StatusConsole
+                console.log('[EXPLORING]', data.direction, data.nodes?.[0], 'visited:', data.stats?.visited);
                 window.dispatchEvent(new CustomEvent('bfs-log', { detail: data }));
 
               } else if (data.status === 'error') {
