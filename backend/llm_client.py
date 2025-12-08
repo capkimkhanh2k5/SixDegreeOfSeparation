@@ -280,6 +280,11 @@ async def generate_relationship_context(person1: str, person2: str) -> str:
         try:
             model = genai.GenerativeModel('gemini-flash-latest')
             response = await model.generate_content_async(system_prompt)
+            
+            # Handle empty response gracefully
+            if not response.parts or len(response.parts) == 0:
+                return "Connected via Wikipedia links"
+            
             return response.text.strip()
         except Exception as e:
             if "429" in str(e) or "quota" in str(e).lower():
