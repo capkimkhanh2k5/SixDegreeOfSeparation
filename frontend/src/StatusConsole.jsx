@@ -18,6 +18,27 @@ const parseLogData = (data) => {
 };
 
 // ============================================================================
+// HELPER: Format raw backend message into user-friendly text
+// ============================================================================
+const formatLogMessage = (rawMessage, direction) => {
+    if (!rawMessage) return null;
+
+    // Pattern: "Name (direction): Total → Filtered → Humans humans"
+    // Extract: Name and first number (Total)
+    const regex = /^(.*?)\s+\((forward|backward)\):\s*(\d+)/;
+    const match = rawMessage.match(regex);
+
+    if (match) {
+        const name = match[1].trim();
+        const visited = match[3];
+        return `Checking: ${name} (Visited: ${visited})`;
+    }
+
+    // Fallback: return raw message if no match
+    return rawMessage;
+};
+
+// ============================================================================
 // BADGE COMPONENT - Colored buttons like terminal
 // ============================================================================
 const Badge = ({ type, direction }) => {
@@ -43,14 +64,14 @@ const Badge = ({ type, direction }) => {
     const config = getBadge();
 
     return (
-        <span className={`${config.bg} ${config.text} px-1.5 py-0.5 rounded text-[10px] font-bold uppercase min-w-[36px] text-center`}>
+        <span className={`${config.bg} ${config.text} px-1.5 py-0.5 rounded text-[10px] font-bold uppercase min-w-[36px] text-center inline-block`}>
             {config.label}
         </span>
     );
 };
 
 // ============================================================================
-// SINGLE LOG LINE - Shows exact backend message
+// SINGLE LOG LINE - Formatted and clean
 // ============================================================================
 const LogLine = ({ log }) => {
     const { status, direction, message } = log.parsed;
@@ -58,39 +79,50 @@ const LogLine = ({ log }) => {
     // Skip heartbeats in display
     if (status === 'heartbeat') return null;
 
-    // Get the display text - prioritize 'message' field for 'log' status
+    // Get the formatted display text
     const getDisplayText = () => {
         if (status === 'log' && message) {
-            return message; // Exact message from backend: "Carlo Rubbia (forward): 318 → 22 humans"
+            // Format the raw backend message
+            return formatLogMessage(message, direction);
         }
-        if (message) return message;
-        if (log.parsed.nodes?.[0]) {
-            return `Checking: ${log.parsed.nodes[0]}`;
+        if (status === 'finished') {
+            return message || '🎯 Path found! Generating context...';
         }
-        return JSON.stringify(log.parsed);
+        if (status === 'error') {
+            return `⚠️ ${message || 'Error occurred'}`;
+        }
+        if (status === 'info') {
+            return message || 'System active';
+        }
+        if (status === 'exploring' && log.parsed.nodes?.[0]) {
+            const visited = log.parsed.stats?.visited || '?';
+            return `Checking: ${log.parsed.nodes[0]} (Visited: ${visited})`;
+        }
+        // Fallback
+        return message || JSON.stringify(log.parsed);
     };
 
-    // Text color based on direction
+    // Text color based on status and direction
     const getTextColor = () => {
         if (status === 'log' || status === 'exploring') {
             if (direction === 'forward') return 'text-blue-300';
             if (direction === 'backward') return 'text-purple-300';
         }
-        if (status === 'finished') return 'text-green-300';
-        if (status === 'error') return 'text-red-300';
+        if (status === 'finished') return 'text-green-400 font-semibold';
+        if (status === 'error') return 'text-red-400';
         return 'text-zinc-400';
     };
 
     return (
-        <div className="flex items-start gap-2 py-0.5 hover:bg-white/5 px-2 -mx-2 rounded font-mono text-xs">
+        <div className="flex items-start gap-2 py-1 hover:bg-white/5 px-2 -mx-2 rounded font-mono text-xs">
             {/* Timestamp */}
             <span className="text-zinc-600 flex-shrink-0">[{log.time}]</span>
 
             {/* Badge */}
             <Badge type={status} direction={direction} />
 
-            {/* Message - exact text from backend */}
-            <span className={`${getTextColor()} break-all`}>
+            {/* Formatted message */}
+            <span className={`${getTextColor()} break-words`}>
                 {getDisplayText()}
             </span>
         </div>
@@ -202,7 +234,7 @@ const StatusConsole = ({ loading }) => {
             {/* Footer */}
             {logs.length > 0 && (
                 <div className="px-3 py-1.5 bg-zinc-900/50 border-t border-zinc-800/50 font-mono text-[10px] text-zinc-600">
-                    <span className="text-green-500">$</span> {metrics.nodes} nodes processed | {metrics.events} total events
+                    <span className="text-green-500">$</span> {metrics.nodes} nodes checked | {metrics.events} total events
                 </div>
             )}
         </div>
