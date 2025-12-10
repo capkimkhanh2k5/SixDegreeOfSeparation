@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# Python
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.pytest_cache/
+
+# Node
+frontend/node_modules
+frontend/dist
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Logs
+*.log
+frontend/*.log
+
+# Environment (sẽ được mount riêng)
+.env
+
+# Tests
+tests/
+
+# Docs
+README.md
+assets/
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore

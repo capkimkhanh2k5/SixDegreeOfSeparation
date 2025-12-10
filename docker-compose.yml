@@ -1,0 +1,44 @@
+services:
+  sixdegree:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sixdegree-app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Persist cache files (optional - for development)
+      - ./backlink_cache.json:/app/backlink_cache.json
+      - ./category_cache.json:/app/category_cache.json
+      - ./wiki_cache.json:/app/wiki_cache.json
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Development mode with hot reload (optional)
+  sixdegree-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: sixdegree-dev
+    ports:
+      - "8000:8000"
+      - "5173:5173"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./backend:/app/backend
+      - ./frontend:/app/frontend
+      - /app/frontend/node_modules
+    profiles:
+      - dev
